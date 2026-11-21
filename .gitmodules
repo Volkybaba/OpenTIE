@@ -1,6 +1,6 @@
 [submodule "aeron"]
 	path = aeron
-	url = https://github.com/elyosh/aeron
+	url = https://github.com/Volkybaba/Aeron.git
 [submodule "src/landru"]
 	path = src/landru
 	url = https://github.com/elyosh/landru.git
