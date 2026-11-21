@@ -40,7 +40,7 @@ flight:
     opt_projectile_emissive_strength: 5.0
 
 input:
-  mouse_flight: true
+  mouse_flight: false
   mouse_mode: classic
   mouse_sensitivity: 5
   mouse_invert_y: true
@@ -48,9 +48,9 @@ input:
   gamepad_defaults:
     axes:
       yaw: {source: leftx, invert: false, deadzone: 0.08}
-      pitch: {source: lefty, invert: false, deadzone: 0.08}
+      pitch: {source: lefty, invert: true, deadzone: 0.08}
       roll: {source: rightx, invert: false, deadzone: 0.08}
-      throttle: {source: 'none', invert: false}
+      throttle: {source: righty, invert: true}
     buttons:
       fire_weapon:
         - south
@@ -71,10 +71,8 @@ input:
       escape: back
       view_return_to_cockpit: rightstick
   keyboard:
-    info_previous_item:
-      - {key: "Up"}
-    info_next_item:
-      - {key: "Down"}
+    info_previous_item: []
+    info_next_item: []
     fire_weapon: []
     target_roll_throttle_modifier: []
     target_next:
@@ -105,7 +103,6 @@ input:
     throttle_full:
       - {key: "Backspace"}
     match_speed:
-      - {key: "Return"}
       - {key: "Keypad Enter"}
     cycle_weapon_group:
       - {key: "W"}
@@ -194,10 +191,8 @@ input:
       - {key: "F7"}
     toggle_threat_display:
       - {key: "Z"}
-    roll_left_info_previous:
-      - {key: "Left"}
-    roll_right_info_next:
-      - {key: "Right"}
+    roll_left_info_previous: []
+    roll_right_info_next: []
     info_wingman_commands:
       - {key: "Z", modifiers: [shift]}
     recorder_view:
@@ -252,7 +247,8 @@ input:
 
 video:
   fullscreen: false
-  hdr: true
+  brightness: 3.0
+  hdr: false
   sdr_content_gamma: auto
   paper_white_nits: auto
 

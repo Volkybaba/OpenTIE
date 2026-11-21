@@ -240,7 +240,7 @@ ShadingPrep prepare_shading(
 }
 
 float4 main(float4 pos          : SV_Position,
-            noperspective float raw_dot : TEXCOORD2,
+            float raw_dot : TEXCOORD2,
             float  v_color      : COLOR0,
             float  v_material   : COLOR1,
             float  v_highlight  : COLOR2,

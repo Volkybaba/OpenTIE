@@ -32,7 +32,7 @@ void TieFlightRenderer_ClassicDrawPass(TieFlightRenderer* g, AeronCommandBuffer*
 
 	AeronGraphicsPipeline* initial_mesh_pp = g->mesh_pipeline;
 	Aeron_BindGraphicsPipeline(pass, initial_mesh_pp);
-	Aeron_BindStorageBuffer(pass, AERON_SHADER_STAGE_VERTEX, 0, g->classic_mesh_tables.buffer);
+	Aeron_BindTextureSampler(pass, AERON_SHADER_STAGE_VERTEX, 0, g->classic_mesh_tables.texture, g->sampler);
 	/* Mesh FS samplers: materialcolors LUT + palette. */
 	Aeron_BindTextureSampler(pass, AERON_SHADER_STAGE_FRAGMENT, 0, g->materialcolors_tex, g->sampler);
 	Aeron_BindTextureSampler(pass, AERON_SHADER_STAGE_FRAGMENT, 1, g->palette_tex, g->sampler);
@@ -162,12 +162,12 @@ void TieFlightRenderer_ClassicDrawPass(TieFlightRenderer* g, AeronCommandBuffer*
 		const bool species_changed = (species_idx != last_ship_idx);
 
 		/* The fragment shader always declares both decal buffers. For
-		 * decal-free geometry, decal_count is zero and the persistent
-		 * mesh-table storage buffer is a valid unread placeholder. */
+		 * decal-free geometry, decal_count is zero and the small
+		 * placeholder storage buffer is a valid unread placeholder. */
 		if (species_changed) {
 			AeronBuffer* dsb_records =
-				sm->decal_records_sb ? sm->decal_records_sb : g->classic_mesh_tables.buffer;
-			AeronBuffer* dsb_verts = sm->decal_verts_sb ? sm->decal_verts_sb : g->classic_mesh_tables.buffer;
+				sm->decal_records_sb ? sm->decal_records_sb : g->decal_placeholder_buffer;
+			AeronBuffer* dsb_verts = sm->decal_verts_sb ? sm->decal_verts_sb : g->decal_placeholder_buffer;
 			Aeron_BindStorageBuffer(pass, AERON_SHADER_STAGE_FRAGMENT, 0, dsb_records);
 			Aeron_BindStorageBuffer(pass, AERON_SHADER_STAGE_FRAGMENT, 1, dsb_verts);
 		}
@@ -207,7 +207,7 @@ void TieFlightRenderer_ClassicDrawSingle(TieFlightRenderer* g, AeronCommandBuffe
 
 	TIE_GPU_MARKER(cmd, "PIP classic mesh");
 	Aeron_BindGraphicsPipeline(pass, g->classic_pip_mesh_pipeline);
-	Aeron_BindStorageBuffer(pass, AERON_SHADER_STAGE_VERTEX, 0, g->classic_mesh_tables.buffer);
+	Aeron_BindTextureSampler(pass, AERON_SHADER_STAGE_VERTEX, 0, g->classic_mesh_tables.texture, g->sampler);
 
 	Aeron_BindTextureSampler(pass, AERON_SHADER_STAGE_FRAGMENT, 0, g->materialcolors_tex, g->sampler);
 	Aeron_BindTextureSampler(pass, AERON_SHADER_STAGE_FRAGMENT, 1, g->palette_tex, g->sampler);
@@ -251,8 +251,8 @@ void TieFlightRenderer_ClassicDrawSingle(TieFlightRenderer* g, AeronCommandBuffe
 	/* Bind valid storage placeholders when the target has no decals. */
 	{
 		AeronBuffer* dsb_records =
-			sm->decal_records_sb ? sm->decal_records_sb : g->classic_mesh_tables.buffer;
-		AeronBuffer* dsb_verts = sm->decal_verts_sb ? sm->decal_verts_sb : g->classic_mesh_tables.buffer;
+			sm->decal_records_sb ? sm->decal_records_sb : g->decal_placeholder_buffer;
+		AeronBuffer* dsb_verts = sm->decal_verts_sb ? sm->decal_verts_sb : g->decal_placeholder_buffer;
 		Aeron_BindStorageBuffer(pass, AERON_SHADER_STAGE_FRAGMENT, 0, dsb_records);
 		Aeron_BindStorageBuffer(pass, AERON_SHADER_STAGE_FRAGMENT, 1, dsb_verts);
 	}

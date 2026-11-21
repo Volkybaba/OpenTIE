@@ -28,7 +28,7 @@ typedef struct TieFlightStarsVertexUniforms {
 
 #define TIE_FLIGHT_TIE98_MAX_STARS 3072
 
-_Static_assert(sizeof(TieFlightStarInstance) == 16, "star instance must match StructuredBuffer<float4>");
+_Static_assert(sizeof(TieFlightStarInstance) == 16, "star instance must match the RGBA32F texture texel");
 _Static_assert(sizeof(TieFlightStarsVertexUniforms) == 160,
 			   "star uniforms must match the HLSL cbuffer layout");
 
@@ -38,7 +38,10 @@ struct TieFlightStars {
 	AeronGraphicsPipeline* pipeline;
 	AeronSampleCount pipeline_samples;
 	AeronTextureFormat rt_format;
-	AeronBuffer* instances;
+	/* Star directions as a 2D RGBA32F texture (width = star count,
+	 * height = 1): vertex stages on GLES allow zero storage blocks. */
+	AeronTexture* instances_tex;
+	AeronSampler* instances_sampler;
 	TieFlightStarInstance cached[TIE_FLIGHT_TIE98_MAX_STARS];
 	TieFlightStarInstance staging[TIE_FLIGHT_TIE98_MAX_STARS];
 	uint8_t tie98_position_index[TIE_FLIGHT_TIE98_MAX_STARS];
@@ -171,15 +174,21 @@ TieFlightStars* TieFlightStars_Create(AeronTextureFormat rt_format) {
 	if (!stars)
 		return NULL;
 	stars->rt_format = rt_format;
-	stars->vs = TieFlightRenderer_CompileShader("flight_stars.vert", AERON_SHADER_STAGE_VERTEX, 0, 1, 1);
+	stars->vs = TieFlightRenderer_CompileShader("flight_stars.vert", AERON_SHADER_STAGE_VERTEX, 1, 1, 0);
 	stars->ps = TieFlightRenderer_CompileShader("flight_stars.frag", AERON_SHADER_STAGE_FRAGMENT, 0, 0, 0);
-	stars->instances = Aeron_CreateBuffer(&(AeronBufferDesc) {
-		.size = sizeof stars->cached,
-		.usage = AERON_BUFFER_USAGE_STORAGE,
-		.memory_usage = AERON_MEMORY_USAGE_GPU_ONLY,
-		.debug_name = "tie.flight.stars.instances",
+	stars->instances_tex = TieFlightRenderer_CreateDataTex(AERON_TEXTURE_FORMAT_RGBA32_FLOAT,
+															TIE_FLIGHT_TIE98_MAX_STARS, 1, 16);
+	stars->instances_sampler = Aeron_CreateSampler(&(AeronSamplerDesc) {
+		.min_filter = AERON_FILTER_NEAREST,
+		.mag_filter = AERON_FILTER_NEAREST,
+		.mip_filter = AERON_FILTER_NEAREST,
+		.address_u = AERON_ADDRESS_CLAMP_TO_EDGE,
+		.address_v = AERON_ADDRESS_CLAMP_TO_EDGE,
+		.address_w = AERON_ADDRESS_CLAMP_TO_EDGE,
+		.min_lod = 0.0f,
+		.max_lod = 0.0f,
 	});
-	if (!stars->vs || !stars->ps || !stars->instances) {
+	if (!stars->vs || !stars->ps || !stars->instances_tex || !stars->instances_sampler) {
 		Aeron_LogError("tie.flight", "starfield GPU resource creation failed");
 		TieFlightStars_Destroy(stars);
 		return NULL;
@@ -197,8 +206,10 @@ void TieFlightStars_Destroy(TieFlightStars* stars) {
 		Aeron_DestroyShader(stars->vs);
 	if (stars->ps)
 		Aeron_DestroyShader(stars->ps);
-	if (stars->instances)
-		Aeron_DestroyBuffer(stars->instances);
+	if (stars->instances_tex)
+		Aeron_DestroyTexture(stars->instances_tex);
+	if (stars->instances_sampler)
+		Aeron_DestroySampler(stars->instances_sampler);
 	free(stars);
 }
 
@@ -238,7 +249,14 @@ bool TieFlightStars_Prepare(TieFlightStars* stars, AeronCommandBuffer* cmd, cons
 	const bool changed = !stars->cache_valid || stars->cached_count != count ||
 						 stars->cached_style != style || memcmp(stars->cached, stars->staging, bytes) != 0;
 	if (changed) {
-		if (!Aeron_UploadBufferDataCmd(cmd, stars->instances, 0, stars->staging, bytes)) {
+		if (!Aeron_UploadTextureBatchCmd(cmd, &(AeronTextureUploadDesc) {
+				.texture = stars->instances_tex,
+				.mip_level = 0, .x = 0, .y = 0,
+				.width = (int)count, .height = 1,
+				.raw_data = stars->staging,
+				.raw_size = bytes,
+				.cycle = 1,
+			}, 1)) {
 			stars->pending_count = 0;
 			return false;
 		}
@@ -285,7 +303,7 @@ void TieFlightStars_DrawInPass(TieFlightStars* stars, AeronCommandBuffer* cmd, A
 	TIE_GPU_PUSH(cmd,
 				 stars->pending_style == TIE_FLIGHT_STARFIELD_STYLE_TIE98 ? "TIE98 stars" : "TIE95 stars");
 	Aeron_BindGraphicsPipeline(pass, stars->pipeline);
-	Aeron_BindStorageBuffer(pass, AERON_SHADER_STAGE_VERTEX, 0, stars->instances);
+	Aeron_BindTextureSampler(pass, AERON_SHADER_STAGE_VERTEX, 0, stars->instances_tex, stars->instances_sampler);
 	Aeron_BindUniformData(pass, AERON_SHADER_STAGE_VERTEX, 0, &uniforms, sizeof uniforms);
 	Aeron_DrawInstanced(pass, 6, stars->pending_count, 0);
 	TIE_GPU_POP(cmd);

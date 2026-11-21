@@ -67,6 +67,21 @@ static bool TieFlightRenderer_SceneMeshCameraHidden(const TieFlightObjectState* 
 		   curr->replay_mode != 2;
 }
 
+/* VolkyTFColl v38 DIAG (temporary): enemy-ship predicate for the combat
+ * logs. Ships only (no projectiles/debris/explosions/gates); side
+ * differs from the player's side; not the camera craft itself. */
+static bool TieFlightRenderer_IsCombatEnemyShip(const TieFlightObjectState* fl, int player_side,
+												const TieSnapshot* curr) {
+	if (player_side < 0)
+		return false;
+	if (fl->slot == curr->camera.target_obj_slot)
+		return false;
+	if (fl->genus == TIE_GENUS_PROJECTILE_NPC || fl->genus == TIE_GENUS_PROJECTILE_PLAYER ||
+	    fl->genus == TIE_GENUS_DEBRIS || fl->genus == TIE_GENUS_EXPLOSION || fl->genus == TIE_GENUS_GATE)
+		return false;
+	return (int)fl->side != player_side;
+}
+
 /* Static objects use ship_class 8..11 as their mesh-rendering discriminator. */
 static bool TieFlightRenderer_SceneStaticMeshEligible(const TieStaticObjectState* so,
 													  uint16_t* out_species_idx) {
@@ -252,6 +267,12 @@ static void TieFlightRenderer_BuildInstance(TieFlightRenderer* g, AeronSceneMesh
 
 	const bool is_projectile =
 		(fl->genus == TIE_GENUS_PROJECTILE_NPC || fl->genus == TIE_GENUS_PROJECTILE_PLAYER);
+	/* VolkyTFColl: laser/missile bolts are flat ribbons billboarded toward the
+	 * camera; a single-sided ribbon whose front face ends up pointing away
+	 * (det=-1 render basis) is back-face culled entirely and invisible.
+	 * A glowing bolt is visible from both sides — draw it double-sided. */
+	if (is_projectile)
+		in->cull_mode = AERON_CULL_NONE;
 	float position_local[3];
 	AeronWorld_LocalI32(origin_world, fl->world_pos, position_local);
 	if (is_projectile) {
@@ -260,6 +281,55 @@ static void TieFlightRenderer_BuildInstance(TieFlightRenderer* g, AeronSceneMesh
 	} else {
 		TieRenderMath_Mat4FromQuaternionTranslation(in->transform, fl->ori, position_local,
 													AERON_OPT_UNITS_PER_METER);
+	}
+
+	/* VolkyTFColl v31 DIAG (gecici): mermi vertex'lerinin gercek ekran konumunu CPU'da
+	 * logla — temiz v30 tabaninda lazer gorunmuyor. clip = view_proj * C2W * vertex_local.
+	 * Vertex'ler ekrandaysa (onscreen=1) sorun draw skip, degilse transform yanlis. */
+	if (is_projectile && fl->ship_idx >= 137 && fl->ship_idx <= 154 && s->mesh &&
+		s->mesh->cpu_vertices && s->mesh->cpu_indices && s->mesh->opaque_index_count >= 3) {
+		static uint32_t diag_ndc_counter = 0;
+		if ((diag_ndc_counter++ % 30) == 0) {
+			const AeronSceneMesh* m = s->mesh;
+			const uint32_t tri_count = m->opaque_index_count / 3;
+			uint32_t onscreen = 0;
+			uint32_t total = 0;
+			for (uint32_t t = 0; t < tri_count; t++) {
+				for (int k = 0; k < 3; k++) {
+					const uint16_t vi = m->cpu_indices[t * 3 + k];
+					const float* p = m->cpu_vertices[vi].pos;
+					const float wx = in->transform[0] * p[0] + in->transform[1] * p[1] +
+									 in->transform[2] * p[2] + in->transform[3];
+					const float wy = in->transform[4] * p[0] + in->transform[5] * p[1] +
+									 in->transform[6] * p[2] + in->transform[7];
+					const float wz = in->transform[8] * p[0] + in->transform[9] * p[1] +
+									 in->transform[10] * p[2] + in->transform[11];
+					const float cx = view_proj[0] * wx + view_proj[1] * wy + view_proj[2] * wz +
+									 view_proj[3];
+					const float cy = view_proj[4] * wx + view_proj[5] * wy + view_proj[6] * wz +
+									 view_proj[7];
+					const float cz = view_proj[8] * wx + view_proj[9] * wy + view_proj[10] * wz +
+									 view_proj[11];
+					const float cw = view_proj[12] * wx + view_proj[13] * wy + view_proj[14] * wz +
+									 view_proj[15];
+					const float nx = (cw != 0.0f) ? cx / cw : 0.0f;
+					const float ny = (cw != 0.0f) ? cy / cw : 0.0f;
+					const float nz = (cw != 0.0f) ? cz / cw : 0.0f;
+					const int os = (cw > 0.0f && nx >= -1.0f && nx <= 1.0f && ny >= -1.0f &&
+									ny <= 1.0f)
+									   ? 1
+									   : 0;
+					onscreen += (uint32_t)os;
+					total++;
+					Aeron_LogInfo("tie.flight",
+								  "DIAG laser ndc species=%u tri=%u v=%u ndc=%.3f,%.3f,%.3f w=%.3f "
+								  "onscreen=%d",
+								  (unsigned)fl->ship_idx, t, k, nx, ny, nz, cw, os);
+				}
+			}
+			Aeron_LogInfo("tie.flight", "DIAG laser ndc species=%u onscreen=%u/%u",
+						  (unsigned)fl->ship_idx, onscreen, total);
+		}
 	}
 
 	memcpy(in->prev_transform, in->transform, sizeof in->prev_transform);
@@ -374,6 +444,16 @@ void TieFlightRenderer_SceneSubmit(TieFlightRenderer* g, const TieSnapshot* curr
 	if (!g->scene_model_backend)
 		return;
 
+	/* VolkyTFColl v38 DIAG (temporary): player side, for the enemy-ship
+	 * logs below. The camera rides on the player's craft. */
+	int combat_player_side = -1;
+	for (uint16_t pi = 0; pi < curr->flight_count; ++pi) {
+		if (curr->flights[pi].slot == curr->camera.target_obj_slot) {
+			combat_player_side = (int)curr->flights[pi].side;
+			break;
+		}
+	}
+
 	TieFlightFrustumPlanes fr;
 	TieFlightRenderer_BuildFrustumPlanes(&fr, view_proj);
 
@@ -399,8 +479,31 @@ void TieFlightRenderer_SceneSubmit(TieFlightRenderer* g, const TieSnapshot* curr
 			&fr, position_local, s->mesh->bound_radius * AERON_OPT_UNITS_PER_METER);
 		const bool projectile =
 			fl->genus == TIE_GENUS_PROJECTILE_NPC || fl->genus == TIE_GENUS_PROJECTILE_PLAYER;
-		const bool shadow_only = camera_hidden || outside_frustum;
-		if (shadow_only && (!shadows_active || projectile))
+		/* VolkyTFColl v21: projectiles are never culled. A bolt spawns at
+		 * the camera and is tiny and fast — the frustum/camera checks drop
+		 * it intermittently (V20 log: snap=1 submitted=0 twice, and mostly
+		 * snap=0), and a dropped bolt is invisible fire feedback. A
+		 * projectile never needs a shadow-only entry (BuildInstance marks
+		 * it NO_CAST/NO_RECEIVE_SHADOW), so it is always submitted as
+		 * visible. Cost is a few small meshes; the GPU clips genuinely
+		 * off-screen bolts. */
+		const bool shadow_only = !projectile && (camera_hidden || outside_frustum);
+		/* VolkyTFColl v38 DIAG (temporary): an enemy ship dropped by
+		 * the frustum cull is skipped entirely when shadows are off —
+		 * a wrong frustum (e.g. after a camera shift) hides whole
+		 * ships. Log every 60th dropped enemy ship (~1/s). */
+		if (shadow_only && !shadows_active &&
+		    TieFlightRenderer_IsCombatEnemyShip(fl, combat_player_side, curr)) {
+			static uint32_t s_cbt_skip_counter = 0;
+			if ((s_cbt_skip_counter++ % 60u) == 0u) {
+				Aeron_LogInfo("tie.flight",
+					      "DIAG combat ship skipped side=%u genus=%u species=%u "
+					      "outfrustum=%d hidden=%d",
+					      (unsigned)fl->side, (unsigned)fl->genus, (unsigned)species_idx,
+					      outside_frustum ? 1 : 0, camera_hidden ? 1 : 0);
+			}
+		}
+		if (shadow_only && !shadows_active)
 			continue;
 		keys[key_count++] =
 			((uint32_t)species_idx << 16) | (shadow_only ? shadow_only_bit : 0u) | (uint32_t)i;
@@ -430,6 +533,39 @@ void TieFlightRenderer_SceneSubmit(TieFlightRenderer* g, const TieSnapshot* curr
 		AeronSceneMeshInstance in;
 		TieFlightRenderer_BuildInstance(g, &in, s, fl, view_proj, cam_pos, curr->camera.world_pos, mb, i,
 										/*is_static=*/false, table);
+		/* VolkyTFColl v38 DIAG (temporary): submitted enemy-ship screen
+		 * position. NDC of the instance center (C2W translation) with
+		 * the same view_proj the VS uses; os=1 means on screen. The
+		 * first enemy ship per battle is always logged (combat start),
+		 * then every 30th submit. */
+		if (TieFlightRenderer_IsCombatEnemyShip(fl, combat_player_side, curr)) {
+			static uint32_t s_cbt_ship_counter = 0;
+			static uint32_t s_cbt_ship_battle = 0;
+			static int s_cbt_ship_seen = 0;
+			const int first_enemy = !s_cbt_ship_seen || curr->battle_id != s_cbt_ship_battle;
+			if (first_enemy || (s_cbt_ship_counter++ % 30u) == 0u) {
+				const float wx = in.transform[3];
+				const float wy = in.transform[7];
+				const float wz = in.transform[11];
+				const float cx = view_proj[0] * wx + view_proj[1] * wy + view_proj[2] * wz + view_proj[3];
+				const float cy = view_proj[4] * wx + view_proj[5] * wy + view_proj[6] * wz + view_proj[7];
+				const float cz = view_proj[8] * wx + view_proj[9] * wy + view_proj[10] * wz + view_proj[11];
+				const float cw = view_proj[12] * wx + view_proj[13] * wy + view_proj[14] * wz + view_proj[15];
+				const float nx = (cw != 0.0f) ? cx / cw : 0.0f;
+				const float ny = (cw != 0.0f) ? cy / cw : 0.0f;
+				const float nz = (cw != 0.0f) ? cz / cw : 0.0f;
+				const int os = (cw > 0.0f && nx >= -1.0f && nx <= 1.0f && ny >= -1.0f && ny <= 1.0f) ? 1 : 0;
+				Aeron_LogInfo("tie.flight",
+					      "DIAG combat ship side=%u genus=%u species=%u "
+					      "ndc=%.3f,%.3f,%.3f w=%.1f os=%d shadow_only=%d "
+					      "pos=(%.0f,%.0f,%.0f)",
+					      (unsigned)fl->side, (unsigned)fl->genus, (unsigned)species_idx,
+					      nx, ny, nz, cw, os, shadow_only ? 1 : 0, in.transform[3],
+					      in.transform[7], in.transform[11]);
+				s_cbt_ship_seen = 1;
+				s_cbt_ship_battle = curr->battle_id;
+			}
+		}
 		if (shadow_only)
 			AeronScene_AddShadowCaster(g->scene, &in);
 		else

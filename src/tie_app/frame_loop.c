@@ -1,5 +1,7 @@
 #include "tie_app/frame_loop.h"
 
+#include <SDL3/SDL_timer.h>
+
 #include "tie_runtime/input/controller_mapping.h"
 #include <stdbool.h>
 #include <stdint.h>
@@ -14,6 +16,7 @@
 #include "tie_remaster/remaster.h"
 #include "tie_runtime/display/classic_display.h"
 #include "tie_runtime/display/classic_framebuffer.h"
+#include "tie_runtime/display/screenshot.h"
 #include "tie_runtime/flight_assets/service.h"
 #include "tie_runtime/input/input.h"
 #include "tie_runtime/presentation/classic_layer.h"
@@ -96,6 +99,15 @@ static void TieFrameLoop_SubmitGameLayers(TieClassicOutputKind* previous_output_
 		TieClassicLayer_Submit(TieClassicFramebuffer_Current());
 	else if (!suppress_classic && corrected_vga)
 		TieClassicLayer_Submit(corrected_vga);
+	else if (!suppress_classic && output_kind == TIE_CLASSIC_OUTPUT_DX5_SURFACE)
+		/* VolkyTFColl v16 (grafik v2): frontend/concourse Landru/VESA
+		 * framebuffer'da ciziliyor (SVGA 640x480), DirectDraw'da degil;
+		 * DX5 retained kare DirectDraw CPU yuzeyinin kopyasi oldugu icin
+		 * siyah/bos kaliyor. corrected_vga (yakalanmis 320x200 VGA kare)
+		 * yalniz hedef VGA iken gecerli; SVGA'da CANLI framebuffer'i
+		 * submit et ki concourse gorunsun. PresentedVga() duzeltmesi
+		 * (bayat film karesini susturma) korundu. */
+		TieClassicLayer_Submit(TieClassicFramebuffer_Current());
 	TieRemaster_Frame(snapshot, delta_us, paused);
 	TieFlightMarker_Submit(snapshot);
 }
@@ -138,6 +150,11 @@ void TieFrameLoop_Run(void) {
 
 	while (TieRuntime_IsActive() && !TieRuntime_ShouldExit() && !Aeron_FatalErrorRequested()) {
 		const int32_t delta_us = Aeron_BeginFrame();
+		/* DIAG freeze: a gap >1s since the last frame means the game
+		 * stalled (Y-key 30s freeze). Log the gap so the stall is
+		 * visible even if the slow phase itself is not instrumented. */
+		if (delta_us > 1000000)
+			Aeron_LogInfo("tie", "DIAG freeze gap_ms=%d", (int)(delta_us / 1000));
 		if (Aeron_FatalErrorRequested())
 			break;
 		if (Aeron_QuitRequested())
@@ -162,8 +179,13 @@ void TieFrameLoop_Run(void) {
 		TieInput_UpdateKeyboard(input, menu_open || hotkey_frame.paused || focus_paused);
 		if (!menu_open)
 			TieInput_BeginFrame(delta_us);
+		/* DIAG freeze: time the three frame phases so a 30s stall is
+		 * attributed to tick (game logic / target change), submit
+		 * (render submission) or present (GPU present). */
+		uint64_t freeze_t0 = SDL_GetTicksNS();
 		if (!hotkey_frame.paused && !menu_open && !focus_paused)
 			TieRuntime_Tick(delta_us);
+		uint64_t freeze_t1 = SDL_GetTicksNS();
 		if (TieRuntime_ConsumeSettingsMenuRequest()) {
 			const bool was_open = TieSettings_Open();
 			TieSettings_Show();
@@ -184,6 +206,7 @@ void TieFrameLoop_Run(void) {
 		const TieSnapshot* snapshot = TieSnapshot_Current();
 		TieFrameLoop_SubmitGameLayers(&previous_output_kind, snapshot, &flight_options, delta_us,
 									  hotkey_frame.paused || menu_open);
+		uint64_t freeze_t2 = SDL_GetTicksNS();
 		/* Do not let the input edge that opened the menu close it again. */
 		if (!settings_opened_this_frame)
 			TieSettings_Frame(input, (float)delta_us * 1e-6f);
@@ -191,10 +214,21 @@ void TieFrameLoop_Run(void) {
 
 		if (Aeron_FatalErrorRequested())
 			break;
+		TieScreenshot_Update(input);
 		if (!Aeron_Present()) {
 			Aeron_RequestFatalRendererError("frame presentation");
 			break;
 		}
+		uint64_t freeze_t3 = SDL_GetTicksNS();
+		if (freeze_t1 - freeze_t0 > 500000000ull)
+			Aeron_LogInfo("tie", "DIAG freeze tick_ms=%llu",
+				      (unsigned long long)((freeze_t1 - freeze_t0) / 1000000ull));
+		if (freeze_t2 - freeze_t1 > 500000000ull)
+			Aeron_LogInfo("tie", "DIAG freeze submit_ms=%llu",
+				      (unsigned long long)((freeze_t2 - freeze_t1) / 1000000ull));
+		if (freeze_t3 - freeze_t2 > 500000000ull)
+			Aeron_LogInfo("tie", "DIAG freeze present_ms=%llu",
+				      (unsigned long long)((freeze_t3 - freeze_t2) / 1000000ull));
 
 		uint64_t wake_delay_us = TieFrameLoop_PresentationIntervalUs();
 		if (!pause_requested) {

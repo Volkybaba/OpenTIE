@@ -7,12 +7,16 @@ cbuffer FlightStarsVS : register(b0, space1)
     float2             pixel_to_clip;
     float2             half_size_px;
     uint               starfield_style;
-    float3             _pad_style;
+    float              _pad_style0;
+    float              _pad_style1;
+    float              _pad_style2;
     float4             star_colors[4];
 };
 
-/* xyz = TIE-world direction axis, w = palette slot 0..3. */
-StructuredBuffer<float4> stars : register(t0, space0);
+/* xyz = TIE-world direction axis, w = palette slot 0..3.
+ * Star directions as a 2D RGBA32F texture (width = star count,
+ * height = 1): vertex stages on GLES allow zero storage blocks. */
+Texture2D<float4> stars : register(t0, space0);
 
 struct VSOut
 {
@@ -29,7 +33,7 @@ VSOut main(uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID)
         (corner_id == 1u || corner_id == 2u) ? 1.0f : -1.0f,
         (corner_id == 2u || corner_id == 3u) ? 1.0f : -1.0f);
 
-    float4 star = stars[instance_id];
+    float4 star = stars.Load(int3(instance_id, 0, 0));
     float4 clip = mul(view_proj, float4(star.xyz, 0.0f));
 
     VSOut output;

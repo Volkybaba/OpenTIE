@@ -43,7 +43,9 @@ cbuffer MeshVSUniforms : register(b0, space1)
     float3             craft_world_pos;
     float              _pad_cwp;
     uint               mesh_table_index;
-    uint3              _pad_mesh_table;
+    uint               _pad_mesh_table0;
+    uint               _pad_mesh_table1;
+    uint               _pad_mesh_table2;
 };
 
 cbuffer LineVSUniforms : register(b1, space1)
@@ -80,7 +82,7 @@ struct VSOut
     /* Signed scalar lambert — same contract as flight_mesh.vert.hlsl
      * so the shared FS can consume one interpolant regardless of
      * pipeline. Gouraud lines interpolate it between endpoints. */
-    noperspective float raw_dot : TEXCOORD2;
+    float raw_dot : TEXCOORD2;
     float  v_color      : COLOR0;
     float  v_material   : COLOR1;
     float  v_highlight  : COLOR2;

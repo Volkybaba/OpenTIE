@@ -66,7 +66,17 @@ void TieClassicFramebuffer_CapturePresentedVga(void) {
 void TieClassicFramebuffer_InvalidatePresentedVga(void) { s_presented_vga_valid = false; }
 
 const TieFramebuffer* TieClassicFramebuffer_PresentedVga(void) {
+	LandruVideoTarget target;
 	if (!s_presented_vga_valid || !TieClassicDisplay_FrontendActive() || !TieProfile_UsesTie98Frontend())
+		return NULL;
+	/* The presented VGA frame is only valid while the active video target
+	 * is still 320x200 VGA. After a film the frontend switches to SVGA
+	 * (640x480) but the film and the frontend share the same owner, so
+	 * CapturePresentedVga is not re-run and the stale film frame would
+	 * keep being submitted as an opaque classic layer on top of the DX5
+	 * frontend. Suppress it once the target is no longer VGA. */
+	if (!xsurface_Get_Active_Video_Target(&target) || !target.pixels ||
+		target.width != TIE_PRESENTED_VGA_WIDTH || target.height != TIE_PRESENTED_VGA_HEIGHT)
 		return NULL;
 	s_presented_vga_framebuffer = (TieFramebuffer) {
 		.pixels = s_presented_vga_pixels,

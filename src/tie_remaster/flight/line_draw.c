@@ -12,7 +12,7 @@
  * it depends on at entry; the caller doesn't owe any state.
  *
  * Per-craft transform uniforms are pushed here independently of the mesh
- * sub-pass; shared mesh-table data comes from TieFlightRenderer's storage buffer.
+ * sub-pass; shared mesh-table data comes from TieFlightRenderer's texture.
  */
 
 #include "tie_remaster/flight/line_draw.h"
@@ -57,7 +57,7 @@ void TieFlightRenderer_LinesDrawPass(TieFlightRenderer* g, AeronCommandBuffer* c
 		return;
 	if (!g->line_pipeline && !g->bolt_line_pipeline)
 		return;
-	Aeron_BindStorageBuffer(pass, AERON_SHADER_STAGE_VERTEX, 0, g->classic_mesh_tables.buffer);
+	Aeron_BindTextureSampler(pass, AERON_SHADER_STAGE_VERTEX, 0, g->classic_mesh_tables.texture, g->sampler);
 
 	TIE_GPU_MARKER(cmd, "Lines + bolts");
 
@@ -131,8 +131,8 @@ void TieFlightRenderer_LinesDrawPass(TieFlightRenderer* g, AeronCommandBuffer* c
 		 * though line vertices always skip decal reads. */
 		if (species_idx != last_species_idx) {
 			AeronBuffer* dsb_records =
-				sm->decal_records_sb ? sm->decal_records_sb : g->classic_mesh_tables.buffer;
-			AeronBuffer* dsb_verts = sm->decal_verts_sb ? sm->decal_verts_sb : g->classic_mesh_tables.buffer;
+				sm->decal_records_sb ? sm->decal_records_sb : g->decal_placeholder_buffer;
+			AeronBuffer* dsb_verts = sm->decal_verts_sb ? sm->decal_verts_sb : g->decal_placeholder_buffer;
 			Aeron_BindStorageBuffer(pass, AERON_SHADER_STAGE_FRAGMENT, 0, dsb_records);
 			Aeron_BindStorageBuffer(pass, AERON_SHADER_STAGE_FRAGMENT, 1, dsb_verts);
 			last_species_idx = species_idx;

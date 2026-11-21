@@ -23,6 +23,7 @@
 
 #include "tie/feinput.h"
 #include "tie/festring.h"
+#include "tie/sys2.h" /* sys2_calclength (banner width probe) */
 #include "tie/flight_surface_tie98.h"
 #include "tie/frontend_display_tie98.h"
 #include "tie/mission.h"
@@ -709,7 +710,36 @@ void fediskio_Init_Buffers_and_Fonts(void) {
 	}
 
 	festring_setfontsize(1);
-	festring_setbound(0, 0, (int16_t)screenXRes, (int16_t)screenYRes);
+	/* VolkyTFColl: the loading banner is drawn into the live Landru
+	 * framebuffer, which is VGA 320x200 during flight loading, while
+	 * screenXRes/screenYRes already hold the SVGA flight resolution
+	 * (640x480). Centering for 640 in a 320-wide buffer pushes the text
+	 * off the right edge ("Initializing Com..."). Use the framebuffer's
+	 * actual dimensions for the bound and the cursor, clamped on-screen.
+	 * The loading screen is ALWAYS VGA 320x200, so clamp the bound to
+	 * it even if Current() already reports the SVGA flight target.
+	 * The SVGA tiny font (21px) can ALSO make the 31-char banner wider
+	 * than 320px even when centered correctly (outstringcenter clamps
+	 * x to the left margin, so the text starts at 0 and runs off the
+	 * right edge) — fall back to the narrower micro font when the
+	 * string does not fit at the tiny size. */
+	const TieFramebuffer* fb = TieClassicFramebuffer_Current();
+	int16_t fb_w = fb ? (int16_t)fb->width : (int16_t)screenXRes;
+	int16_t fb_h = fb ? (int16_t)fb->height : (int16_t)screenYRes;
+	if (fb_w > 320)
+		fb_w = 320;
+	if (fb_h > 200)
+		fb_h = 200;
+	if (fb_w <= 0)
+		fb_w = 320;
+	if (fb_h <= 0)
+		fb_h = 200;
+	{
+		const char* banner_probe = flightloadstrings[0];
+		if (banner_probe && sys2_calclength((const uint8_t*)banner_probe) > fb_w)
+			festring_setfontsize(2);
+	}
+	festring_setbound(0, 0, fb_w, fb_h);
 	backcolor = 0;
 	dropcolor = 0;
 	dropflag = 0;
@@ -727,7 +757,12 @@ void fediskio_Init_Buffers_and_Fonts(void) {
 	 * time so the banner survives modern near-instant asset loads. */
 	{
 		const char* banner = flightloadstrings[0];
-		festring_setcursor(0, (int16_t)((screenYRes >> 1) - 5 * fontheight));
+		int16_t banner_y = (int16_t)((fb_h >> 1) - 5 * fontheight);
+		if (banner_y < 0)
+			banner_y = 0;
+		if (banner_y > fb_h - (int16_t)fontheight)
+			banner_y = fb_h - (int16_t)fontheight;
+		festring_setcursor(0, banner_y);
 		if (banner)
 			festring_outstringcenter((const uint8_t*)banner);
 	}
@@ -739,7 +774,14 @@ void fediskio_Init_Buffers_and_Fonts(void) {
 		fsfx_loadsfx(path);
 	}
 
-	festring_setcursor(0, (int16_t)((screenYRes >> 1) - 4 * fontheight));
+	{
+		int16_t follow_y = (int16_t)((fb_h >> 1) - 4 * fontheight);
+		if (follow_y < 0)
+			follow_y = 0;
+		if (follow_y > fb_h - (int16_t)fontheight)
+			follow_y = fb_h - (int16_t)fontheight;
+		festring_setcursor(0, follow_y);
+	}
 
 	if (musicenabled && TieMusicPolicy_UsesImuse()) {
 		snprintf(path, sizeof(path), "%sadlib.lfd", resourcedir);

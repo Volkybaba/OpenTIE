@@ -214,30 +214,42 @@ TieFlightRenderer* TieFlightRenderer_Init(int rt_w, int rt_h, AeronTextureFormat
 		TieFlightRenderer_Shutdown(g);
 		return NULL;
 	}
-	g->classic_mesh_tables.buffer = Aeron_CreateBuffer(&(AeronBufferDesc) {
+	/* Mesh tables ride a 2D RGBA32F texture (width = stride, height =
+	 * table count): vertex stages on GLES allow zero storage blocks. */
+	g->classic_mesh_tables.texture = TieFlightRenderer_CreateDataTex(
+		AERON_TEXTURE_FORMAT_RGBA32_FLOAT, AERON_MESH_TABLE_STRIDE_VEC4,
+		TIE_MAX_FLIGHT_OBJECTS + TIE_MAX_STATIC_OBJECTS + 1, 16);
+	if (!g->classic_mesh_tables.texture) {
+		Aeron_RequestFatalRendererError("classic mesh-table texture creation");
+		TieFlightRenderer_Shutdown(g);
+		return NULL;
+	}
+	/* Small always-valid storage buffer for the fragment-decal
+	 * placeholder (decal-free species). */
+	g->decal_placeholder_buffer = Aeron_CreateBuffer(&(AeronBufferDesc) {
 		.usage = AERON_BUFFER_USAGE_STORAGE,
-		.size = sizeof g->classic_mesh_tables.tables,
-		.memory_usage = AERON_MEMORY_USAGE_DYNAMIC,
+		.size = 64,
+		.memory_usage = AERON_MEMORY_USAGE_GPU_ONLY,
 	});
-	if (!g->classic_mesh_tables.buffer) {
-		Aeron_RequestFatalRendererError("classic mesh-table buffer creation");
+	if (!g->decal_placeholder_buffer) {
+		Aeron_RequestFatalRendererError("classic decal placeholder buffer creation");
 		TieFlightRenderer_Shutdown(g);
 		return NULL;
 	}
 
 	/* Shader bindings per the HLSL register layouts:
-	 *   mesh_vs   — TieFlightMeshVertexUniforms (slot 0), mesh-table storage (slot 0),
+	 *   mesh_vs   — TieFlightMeshVertexUniforms (slot 0), mesh-table texture (slot 0),
 	 *               and LightBuffer (slot 1) for the Gouraud local-light
 	 *               accumulator.
 	 *   mesh_ps   — 2 samplers (materialcolors index LUT + palette),
 	 *               1 uniform buffer (TieFlightMeshPixelUniforms), 2 storage
 	 *               buffers (decal records + verts). */
-	g->mesh_vs = TieFlightRenderer_CompileShader("flight_mesh.vert", AERON_SHADER_STAGE_VERTEX, 0, 2, 1);
+	g->mesh_vs = TieFlightRenderer_CompileShader("flight_mesh.vert", AERON_SHADER_STAGE_VERTEX, 1, 2, 0);
 	g->mesh_classic_lut_ps =
 		TieFlightRenderer_CompileShader("flight_mesh_classic_lut.frag", AERON_SHADER_STAGE_FRAGMENT, 2, 1, 2);
 	/* line_vs binds TieFlightMeshVertexUniforms (slot 0), TieFlightLineVertexUniforms (slot 1),
-	 * and mesh-table storage (slot 0). */
-	g->line_vs = TieFlightRenderer_CompileShader("flight_line.vert", AERON_SHADER_STAGE_VERTEX, 0, 2, 1);
+	 * and mesh-table texture (slot 0). */
+	g->line_vs = TieFlightRenderer_CompileShader("flight_line.vert", AERON_SHADER_STAGE_VERTEX, 1, 2, 0);
 	if (g->mesh_vs && g->mesh_classic_lut_ps) {
 		g->mesh_pipeline = TieFlightRenderer_CreateMeshPipeline(g->mesh_vs, g->mesh_classic_lut_ps,
 																g->rt_format, g->sample_count);
@@ -457,8 +469,10 @@ void TieFlightRenderer_Shutdown(TieFlightRenderer* g) {
 		Aeron_DestroyRenderTarget(g->classic_pip_color_rt);
 	if (g->classic_pip_depth_rt)
 		Aeron_DestroyDepthTarget(g->classic_pip_depth_rt);
-	if (g->classic_mesh_tables.buffer)
-		Aeron_DestroyBuffer(g->classic_mesh_tables.buffer);
+	if (g->classic_mesh_tables.texture)
+		Aeron_DestroyTexture(g->classic_mesh_tables.texture);
+	if (g->decal_placeholder_buffer)
+		Aeron_DestroyBuffer(g->decal_placeholder_buffer);
 	if (s_current_flight_gpu == g)
 		s_current_flight_gpu = NULL;
 	free(g);

@@ -65,6 +65,20 @@ static bool TieHotkeys_ControllerStartPressed(const AeronInputSnapshot* input) {
 	return false;
 }
 
+/* VolkyTFColl v5: BACK (Select) toggles the settings menu in the frontend,
+ * like START. Select never opened TieSettings in the concourse (no caller),
+ * so the v3 just_opened guard was protecting a menu Select never opened. */
+static bool TieHotkeys_ControllerBackPressed(const AeronInputSnapshot* input) {
+	if (!input)
+		return false;
+	for (int pad = 0; pad < AERON_CONTROLLER_MAX; ++pad) {
+		if (input->controllers[pad].connected &&
+			(input->controllers[pad].gamepad_pressed_buttons & (1u << AERON_GAMEPAD_BUTTON_BACK)))
+			return true;
+	}
+	return false;
+}
+
 static bool TieHotkeys_ProcessSettings(const AeronInputSnapshot* input) {
 	const bool was_open = TieSettings_Open();
 	if (input && input->has_focus && TieSettings_Available()) {
@@ -81,6 +95,13 @@ static bool TieHotkeys_ProcessSettings(const AeronInputSnapshot* input) {
 			was_open || !snapshot || snapshot->scene_kind != TIE_SCENE_FLIGHT;
 		if (start_pressed && start_controls_settings && !TieSettings_CapturesController() &&
 			!TieSettings_CapturesKeyboard())
+			TieSettings_Toggle();
+		/* VolkyTFColl v5: BACK (Select) toggles the settings menu, frontend
+		 * only. Flight is untouched (BACK/ESC already opens there); the
+		 * keyboard ESC path is untouched (computer dialog Cancel). */
+		const bool back_pressed = TieHotkeys_ControllerBackPressed(input);
+		if (back_pressed && snapshot && snapshot->scene_kind == TIE_SCENE_FRONTEND &&
+			!TieSettings_CapturesController() && !TieSettings_CapturesKeyboard())
 			TieSettings_Toggle();
 	}
 	return was_open || TieSettings_Open();

@@ -47,7 +47,9 @@ struct FlightLight {
 cbuffer LightBuffer : register(b1, space1)
 {
     uint        light_count;
-    uint3       _pad_lc;
+    uint        _pad_lc0;
+    uint        _pad_lc1;
+    uint        _pad_lc2;
     FlightLight lights[16];
 };
 

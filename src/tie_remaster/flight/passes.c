@@ -396,8 +396,17 @@ static bool TieFlightRenderer_PrepareClassicMeshTables(TieFlightRenderer* g, Aer
 	TieFlightMesh_BuildclassicMeshTable(mesh, flight, snapshot, TIE_FLIGHT_MESH_TABLE_PIP,
 										&g->classic_mesh_tables.tables[g->classic_pip_table_index]);
 	g->classic_mesh_tables.count = object_count + 1;
-	return Aeron_UploadBufferDataCmd(cmd, g->classic_mesh_tables.buffer, 0, g->classic_mesh_tables.tables,
-									 g->classic_mesh_tables.count * sizeof(AeronSceneMeshTable)) != 0;
+	/* Mesh tables ride a 2D RGBA32F texture (cycle = 1: updated every
+	 * frame, same as OpenXWA scene_storage_ensure_texture). */
+	return Aeron_UploadTextureBatchCmd(cmd, &(AeronTextureUploadDesc) {
+		.texture = g->classic_mesh_tables.texture,
+		.mip_level = 0, .x = 0, .y = 0,
+		.width = AERON_MESH_TABLE_STRIDE_VEC4,
+		.height = (int)g->classic_mesh_tables.count,
+		.raw_data = g->classic_mesh_tables.tables,
+		.raw_size = g->classic_mesh_tables.count * (uint32_t)sizeof(AeronSceneMeshTable),
+		.cycle = 1,
+	}, 1) != 0;
 }
 
 static bool TieFlightRenderer_PreparePip(TieFlightRenderer* g, AeronCommandBuffer* cmd,
@@ -433,6 +442,14 @@ static bool TieFlightRenderer_PreparePip(TieFlightRenderer* g, AeronCommandBuffe
 			}
 		}
 	}
+	/* VolkyTFColl v19: L2 donma — XWA 1.0.1'deki DS_TUNNEL kapısının karşılığı.
+	 * PiP (CMD CRT 3D hedef görünümü) büyük/sabit hedeflerin 3D modelini çizmesin;
+	 * çerçeve + hedef yazısı + radar aynen kalır, yalnız 3D model atlanır.
+	 * OpenTIE'de tünel cinsi yok; en büyük/sabit sınıflar starship/platform + statik
+	 * hedeflerdir (slot >= 0x3800). Avcı/nakliye/yardımcı/freighter PiP'i aynen durur. */
+	if (fl && (target_slot >= 0x3800u || fl->genus == TIE_GENUS_STARSHIP ||
+		   fl->genus == TIE_GENUS_PLATFORM))
+		fl = NULL;
 	if (!TieFlightRenderer_PrepareClassicMeshTables(g, cmd, snap, fl))
 		return false;
 
@@ -679,11 +696,14 @@ bool TieFlightRenderer_PrepareFrame(TieFlightRenderer* g, AeronCommandBuffer* cm
 	}
 	/* The procedural sky has no background primitive: classic fills every
 	 * uncovered main-viewport pixel with deepspacecolor (0xFB), then draws
-	 * palette-indexed stars over it. Keep the HDR scene clear tied to the
-	 * same live palette entry instead of Aeron's generic scene default. */
+	 * palette-indexed stars over it.
+	 * VolkyTFColl v20: the HDR scene clear must be PURE BLACK, not the
+	 * palette entry. The entry is a very dark blue (linear ~0.02); the
+	 * v19 tonemap gamma pow(x, 1/b) lifts it to ~0.29, so space renders
+	 * as solid blue instead of black. pow(0) = 0 stays black at any
+	 * brightness. Stars are drawn as geometry on top, unaffected. */
 	float deep_space_clear[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-	TieScene2dSrgb_PalToLinearRgb(curr->palette[TIE_FLIGHT_DEEP_SPACE_PALETTE_INDEX], &deep_space_clear[0],
-								  &deep_space_clear[1], &deep_space_clear[2]);
+	(void)curr; /* palette entry no longer used for the clear */
 	AeronScene_SetClearColor(g->scene, deep_space_clear);
 
 	if (!TieFlightRenderer_PrepareMissionAssets(g, cmd, curr))
@@ -704,6 +724,117 @@ bool TieFlightRenderer_PrepareFrame(TieFlightRenderer* g, AeronCommandBuffer* cm
 	fcam.camera.viewport = vp;
 
 	const float* view_proj = fcam.view_proj;
+
+	/* VolkyTFColl v38 DIAG (temporary): combat-start camera shift check.
+	 * User reports enemy ships + lasers invisible while the radar dot
+	 * shows, and suspects a screen shift when combat starts. Log the
+	 * camera world pos + orientation + view_proj row0 + viewport every
+	 * 60 host ticks, any single-frame camera jump, and the first frame
+	 * enemy ships appear (combat start) with the before/after camera.
+	 * A jump is a world-pos move > 500 native units in one tick
+	 * (normal max flight step is ~200 even at 2 sim frames/tick);
+	 * view changes / hyperspace / battle changes are teleports by
+	 * design and are excluded. */
+	{
+		static uint32_t s_cbt_frame = 0;
+		static int32_t s_cbt_prev_cam[3] = { 0, 0, 0 };
+		static float s_cbt_prev_vpr0[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		static uint32_t s_cbt_prev_fframe = 0;
+		static uint32_t s_cbt_prev_battle = 0;
+		static uint8_t s_cbt_prev_hyper = 0;
+		static uint8_t s_cbt_prev_pilotview = 0;
+		static uint8_t s_cbt_prev_zoom = 0;
+		static int s_cbt_have_prev = 0;
+		static int s_cbt_started = 0;
+		int player_side = -1;
+		for (uint16_t i = 0; i < curr->flight_count; ++i) {
+			if (curr->flights[i].slot == curr->camera.target_obj_slot) {
+				player_side = (int)curr->flights[i].side;
+				break;
+			}
+		}
+		uint32_t ship_n = 0, enemy_n = 0, proj_n = 0;
+		for (uint16_t i = 0; i < curr->flight_count; ++i) {
+			const TieFlightObjectState* fl = &curr->flights[i];
+			if (fl->genus == TIE_GENUS_PROJECTILE_NPC || fl->genus == TIE_GENUS_PROJECTILE_PLAYER) {
+				proj_n++;
+				continue;
+			}
+			if (fl->genus == TIE_GENUS_DEBRIS || fl->genus == TIE_GENUS_EXPLOSION ||
+			    fl->genus == TIE_GENUS_GATE)
+				continue;
+			ship_n++;
+			if (player_side >= 0 && (int)fl->side != player_side &&
+			    fl->slot != curr->camera.target_obj_slot)
+				enemy_n++;
+		}
+		const int scene_changed =
+			!s_cbt_have_prev || curr->battle_id != s_cbt_prev_battle ||
+			curr->hyperspace.phase != s_cbt_prev_hyper ||
+			curr->camera.pilotview != s_cbt_prev_pilotview ||
+			curr->camera.zoom_active != s_cbt_prev_zoom ||
+			curr->flight_frame < s_cbt_prev_fframe;
+		if (scene_changed)
+			s_cbt_started = 0;
+		if (!s_cbt_started && enemy_n > 0) {
+			s_cbt_started = 1;
+			Aeron_LogInfo("tie.flight",
+				      "DIAG combat start frame=%u battle=%u ships=%u enemy=%u proj=%u "
+				      "cam=(%d,%d,%d) ori=(%.3f,%.3f,%.3f,%.3f) "
+				      "vpr0=(%.3f,%.3f,%.3f,%.3f) "
+				      "prev_cam=(%d,%d,%d) prev_vpr0=(%.3f,%.3f,%.3f,%.3f)",
+				      (unsigned)s_cbt_frame, (unsigned)curr->battle_id, (unsigned)ship_n,
+				      (unsigned)enemy_n, (unsigned)proj_n, curr->camera.world_pos[0],
+				      curr->camera.world_pos[1], curr->camera.world_pos[2],
+				      curr->camera.ori[0], curr->camera.ori[1], curr->camera.ori[2],
+				      curr->camera.ori[3], view_proj[0], view_proj[1], view_proj[2],
+				      view_proj[3], s_cbt_prev_cam[0], s_cbt_prev_cam[1], s_cbt_prev_cam[2],
+				      s_cbt_prev_vpr0[0], s_cbt_prev_vpr0[1], s_cbt_prev_vpr0[2],
+				      s_cbt_prev_vpr0[3]);
+		}
+		if (s_cbt_have_prev && !scene_changed) {
+			const int32_t dx = curr->camera.world_pos[0] - s_cbt_prev_cam[0];
+			const int32_t dy = curr->camera.world_pos[1] - s_cbt_prev_cam[1];
+			const int32_t dz = curr->camera.world_pos[2] - s_cbt_prev_cam[2];
+			const int64_t d2 = (int64_t)dx * dx + (int64_t)dy * dy + (int64_t)dz * dz;
+			if (d2 > 250000) {
+				Aeron_LogInfo("tie.flight",
+					      "DIAG combat jump frame=%u battle=%u dpos=(%d,%d,%d) d2=%lld "
+					      "cam=(%d,%d,%d) vpr0=(%.3f,%.3f,%.3f,%.3f)",
+					      (unsigned)s_cbt_frame, (unsigned)curr->battle_id, dx, dy, dz,
+					      (long long)d2, curr->camera.world_pos[0],
+					      curr->camera.world_pos[1], curr->camera.world_pos[2],
+					      view_proj[0], view_proj[1], view_proj[2], view_proj[3]);
+			}
+		}
+		if ((s_cbt_frame % 60u) == 0u) {
+			Aeron_LogInfo("tie.flight",
+				      "DIAG combat cam frame=%u battle=%u flight_frame=%u ships=%u enemy=%u "
+				      "proj=%u cam=(%d,%d,%d) ori=(%.3f,%.3f,%.3f,%.3f) "
+				      "fcampos=(%.1f,%.1f,%.1f) vpr0=(%.3f,%.3f,%.3f,%.3f) "
+				      "vp=(%d,%d,%dx%d) hyper=%u pilotview=%u",
+				      (unsigned)s_cbt_frame, (unsigned)curr->battle_id,
+				      (unsigned)curr->flight_frame, (unsigned)ship_n, (unsigned)enemy_n,
+				      (unsigned)proj_n, curr->camera.world_pos[0],
+				      curr->camera.world_pos[1], curr->camera.world_pos[2],
+				      curr->camera.ori[0], curr->camera.ori[1], curr->camera.ori[2],
+				      curr->camera.ori[3], (double)fcam.camera.pos[0],
+				      (double)fcam.camera.pos[1], (double)fcam.camera.pos[2],
+				      view_proj[0], view_proj[1], view_proj[2], view_proj[3],
+				      fcam.camera.viewport.x, fcam.camera.viewport.y,
+				      fcam.camera.viewport.width, fcam.camera.viewport.height,
+				      (unsigned)curr->hyperspace.phase, (unsigned)curr->camera.pilotview);
+		}
+		memcpy(s_cbt_prev_cam, curr->camera.world_pos, sizeof s_cbt_prev_cam);
+		memcpy(s_cbt_prev_vpr0, view_proj, 4 * sizeof(float));
+		s_cbt_prev_fframe = curr->flight_frame;
+		s_cbt_prev_battle = curr->battle_id;
+		s_cbt_prev_hyper = curr->hyperspace.phase;
+		s_cbt_prev_pilotview = curr->camera.pilotview;
+		s_cbt_prev_zoom = curr->camera.zoom_active;
+		s_cbt_have_prev = 1;
+		s_cbt_frame++;
+	}
 
 	/* Post-stack gating. SSAO and motion blur run only in the
 	 * full-fidelity HD style — not classic, not XvT. Whether the

@@ -137,7 +137,9 @@ typedef struct TieFlightSceneFrame {
 } TieFlightSceneFrame;
 
 typedef struct TieFlightClassicMeshTables {
-	AeronBuffer* buffer;
+	/* Mesh tables as a 2D RGBA32F texture (width = stride, height =
+	 * table count): vertex stages on GLES allow zero storage blocks. */
+	AeronTexture* texture;
 	AeronSceneMeshTable tables[TIE_MAX_FLIGHT_OBJECTS + TIE_MAX_STATIC_OBJECTS + 1];
 	uint32_t count;
 } TieFlightClassicMeshTables;
@@ -163,6 +165,10 @@ struct TieFlightRenderer {
 	/* Per-frame custom mesh tables borrowed by scene instances until Render. */
 	AeronSceneMeshTable hd_scene_tables[TIE_FLIGHT_SCENE_MAX_INSTANCES];
 	TieFlightClassicMeshTables classic_mesh_tables;
+	/* Small always-valid storage buffer used as the fragment-decal
+	 * placeholder for decal-free species (the FS declares both decal
+	 * buffers unconditionally). */
+	AeronBuffer* decal_placeholder_buffer;
 	uint32_t classic_pip_table_index;
 	int rt_w;
 	int rt_h;

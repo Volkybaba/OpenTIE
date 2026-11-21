@@ -1,10 +1,12 @@
 #include "tie_runtime/presentation/classic_layer.h"
 
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
 #include "aeron/aeron.h"
 #include "aeron/compat/host.h"
+#include "aeron/scene/present.h"
 #include "tie_runtime/display/classic_framebuffer.h"
 #include "tie_runtime/input/input.h"
 #include "tie_runtime/presentation/presentation.h"
@@ -41,6 +43,60 @@ void TieClassicLayer_SyncInputExtent(void) {
 	TieInput_SetFramebufferSize(width, height);
 }
 
+/* VolkyTFColl v21: CPU palette brightness — the same highlight-preserving
+ * gamma curve as DDShim_BrightenRetainedPalette (aeron/src/compat/ddraw.c)
+ * and the HD flight path. The v11 linear GPU tint (tint = b) clipped mid
+ * tones to white (briefing washed out) while barely lifting dark pixels
+ * (concourse stayed dark) — the two v19/v20 symptoms are one wrong curve.
+ * The V20 lift+gain went to the DX5 `rt` branch, which the V20 log proves
+ * never runs in the frontend (no "branch=rt" line; only "branch=retained"
+ * + this layer), while this layer — submitted on top, opaque — hid the
+ * retained branch's correct palette gamma. Baking the curve into the
+ * palette and turning the tint off makes this layer match the retained
+ * branch, so the visible image is correct whichever is on top.
+ * b=5: sRGB 10 -> ~123, 150 -> ~163, 200 -> ~202 (nothing clips).
+ * b=1 is identity. */
+static float Classic_Srgb8ToLinear(uint8_t value) {
+	float srgb = (float)value / 255.0f;
+	return srgb <= 0.04045f ? srgb / 12.92f : powf((srgb + 0.055f) / 1.055f, 2.4f);
+}
+
+static uint8_t Classic_LinearToSrgb8(float value) {
+	float srgb;
+	if (!(value > 0.0f))
+		return 0;
+	if (value > 1.0f)
+		value = 1.0f;
+	srgb = value <= 0.0031308f ? 12.92f * value : 1.055f * powf(value, 1.0f / 2.4f) - 0.055f;
+	if (srgb < 0.0f)
+		srgb = 0.0f;
+	if (srgb > 1.0f)
+		srgb = 1.0f;
+	return (uint8_t)(srgb * 255.0f + 0.5f);
+}
+
+static float Classic_ApplyBrightnessGamma(float linear, float brightness) {
+	if (brightness == 1.0f || !(linear > 0.0f))
+		return linear;
+	float g = powf(linear, 1.0f / brightness);
+	float w = (1.0f - linear) * (1.0f - linear);
+	return linear + (g - linear) * w;
+}
+
+static uint8_t Classic_BrightenedByte(uint8_t srgb, float brightness) {
+	if (brightness == 1.0f)
+		return srgb;
+	return Classic_LinearToSrgb8(Classic_ApplyBrightnessGamma(Classic_Srgb8ToLinear(srgb), brightness));
+}
+
+/* VolkyTFColl v13: brightness diagnostic logging (tie.brightness).
+ * Rate-limited: log on brightness change, otherwise at most once
+ * every 600 submits (~10 s at 60 fps). The first call always logs
+ * (last_b starts at -1). Absence of the "classic submit" line in
+ * the log means this layer was never submitted. */
+static float s_classic_brightness_log_last_b = -1.0f;
+static int s_classic_brightness_log_tick = 0;
+
 void TieClassicLayer_Submit(const TieFramebuffer* framebuffer) {
 	const TiePresentationLayout* presentation = TiePresentation_Layout();
 	if (Aeron_FatalErrorRequested() || !framebuffer || !framebuffer->pixels || framebuffer->width <= 0 ||
@@ -48,14 +104,15 @@ void TieClassicLayer_Submit(const TieFramebuffer* framebuffer) {
 		return;
 
 	TieClassicLayer_SyncInputExtent();
+	const float brightness = AeronScenePresent_Brightness();
 	AeronPaletteEntry palette[256];
 	for (int i = 0; i < 256; ++i) {
 		const uint8_t r = framebuffer->palette[i * 3 + 0];
 		const uint8_t g = framebuffer->palette[i * 3 + 1];
 		const uint8_t b = framebuffer->palette[i * 3 + 2];
-		palette[i].r = (uint8_t)((r << 2) | (r >> 4));
-		palette[i].g = (uint8_t)((g << 2) | (g >> 4));
-		palette[i].b = (uint8_t)((b << 2) | (b >> 4));
+		palette[i].r = Classic_BrightenedByte((uint8_t)((r << 2) | (r >> 4)), brightness);
+		palette[i].g = Classic_BrightenedByte((uint8_t)((g << 2) | (g >> 4)), brightness);
+		palette[i].b = Classic_BrightenedByte((uint8_t)((b << 2) | (b >> 4)), brightness);
 		palette[i].a = 255;
 	}
 
@@ -84,7 +141,24 @@ void TieClassicLayer_Submit(const TieFramebuffer* framebuffer) {
 		.logical_rect = presentation->classic,
 		.blend_mode = AERON_LAYER_BLEND_OPAQUE,
 		.sampling = AERON_PIXEL_SAMPLING_SHARP_BILINEAR,
+		/* VolkyTFColl v21: brightness is baked into the palette above
+		 * (highlight-preserving gamma). The v11 linear GPU tint is OFF:
+		 * tint = b clipped mid tones to white and left darks dark. */
+		.tint_enabled = 0,
+		.tint_rgba = { 1.0f, 1.0f, 1.0f, 1.0f },
 	};
+	/* VolkyTFColl v13: diagnostic — live b + tint at submit time.
+	 * v21: tint is always 0 now; palgamma=1 means the CPU palette
+	 * gamma above is active. */
+	{
+		++s_classic_brightness_log_tick;
+		if (brightness != s_classic_brightness_log_last_b ||
+			(s_classic_brightness_log_tick % 600) == 0) {
+			s_classic_brightness_log_last_b = brightness;
+			Aeron_LogInfo("tie.brightness", "classic submit b=%.2f tint=0 palgamma=%d",
+				(double)brightness, (int)(brightness != 1.0f));
+		}
+	}
 	if (!Aeron_SubmitPixelLayer(&layer))
 		Aeron_RequestFatalRendererError("classic framebuffer layer submission");
 }

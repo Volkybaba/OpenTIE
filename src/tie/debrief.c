@@ -51,6 +51,9 @@
 // GLOBAL: TIE95 0xF5D68
 // GLOBAL: TIE98 0x50F800
 static Actor* door_actors[2]; /* door[0]=brief door, door[1]=fly-again door */
+
+/* VolkyTFColl v3: ignore stale clicks until every button is released once. */
+static int debrief_click_armed;
 // GLOBAL: TIE95 0xF5D84
 // GLOBAL: TIE98 0x50F7EC
 static Input* priest; /* priest widget (id=2) */
@@ -112,6 +115,10 @@ int16_t debrief_Debrief(SceneHeadStruct* scene_head) {
 		mouse_y = TIE_FRONTEND_EDITION(100, 200);
 	}
 	xio_Set_Mouse_Position(mouse_x, mouse_y);
+
+	/* VolkyTFColl v3: the button that closed the goals room is still held;
+	   swallow it until release so it cannot re-trigger fly-again. */
+	debrief_click_armed = !xio_Left_Button() && !xio_Right_Button();
 
 	/* Load resources */
 	resource = shellext_Open_Empire_Resource("debrief.lfd");
@@ -322,6 +329,14 @@ static int16_t debrief_iupdate_Debrief(Input* input, Rect* bounds, Rect* clip, i
 	/* Show title label */
 	title_actor->var1 = 1;
 	title_actor->var2 = input->id;
+
+	/* VolkyTFColl v3: swallow a stale held click (e.g. the A press that
+	   closed the goals room) until all buttons are released once. */
+	if (!debrief_click_armed) {
+		if ((left == 0 && right == 0) || left == 3 || right == 3)
+			debrief_click_armed = 1;
+		return 1;
+	}
 
 	/* Check for mouse click */
 	if (left != 3 && right != 3)

@@ -170,6 +170,11 @@ enum {
  * into user_inputforplane for flight controls. */
 void user_userinterface(void);
 
+/* VolkyTFColl v2: ends the current mission exactly like the Q + Space
+ * keyboard confirmation (replay spool, end_flag = 1, player_status = 3).
+ * Called from the settings menu's Abort Mission confirmation. */
+void TieFlight_RequestAbort(void);
+
 /* Full in-flight key/joystick dispatcher (~150 keybinds). Called from
  * user_userinterface after the hyperspace-freeze / replay-view / pause
  * guards clear. */

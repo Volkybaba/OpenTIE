@@ -3249,37 +3249,50 @@ void panel_update3Dcrt_tie98(uint16_t x, uint16_t y, uint16_t width, uint16_t de
 	objecteyex = transfm2_geteyex(worldx, worldy, worldz);
 	objecteyey = transfm2_geteyey(worldx, worldy, worldz);
 	objecteyez = transfm2_geteyez(worldx, worldy, worldz);
-	if (pstate.target_obj_idx >= OBJ_REF_STATIC_BASE) {
-		const uint16_t static_index = pstate.target_obj_idx - OBJ_REF_STATIC_BASE;
-		StaticObject* object = &staticobjects[static_index];
-		if (object->ship_class >= 8 && object->ship_class <= 11) {
-			fview_newcalcrotate((int16_t)((uint16_t)object->roll_byte << 8),
-								(int16_t)((uint16_t)object->pitch_byte << 8),
-								(int16_t)((uint16_t)object->heading_byte << 8), 0, NULL);
-			lightflag = 1;
-			static_drawstaticobject(static_index);
-		}
-	} else {
-		FlightObject* object = &objects[pstate.target_obj_idx];
-		switch (object->genus) {
-			case GENUS_FIGHTER:
-			case GENUS_TRANSPORT:
-			case GENUS_UTILITY:
-			case GENUS_FREIGHTER:
-			case GENUS_STARSHIP:
-			case GENUS_PLATFORM:
-				craftptr = object->craft_ptr;
-				fview_newcalcrotate(object->roll, object->pitch, object->heading, 0, object);
-				draw_drawcomplexobject_tie98(pstate.target_obj_idx);
-				FlightModel_Draw_Object(object);
-				break;
-			case GENUS_PROJECTILE_PLAYER:
-			case GENUS_PROJECTILE_NPC:
-				fview_newcalcrotate(object->roll, object->pitch, object->heading, 0, object);
-				draw_drawlaser_tie98(pstate.target_obj_idx);
-				break;
-			default:
-				break;
+	/* VolkyTFColl v22: V19 skipped the HD PiP 3D model for static /
+	 * starship / platform targets, but the classic software PiP kept
+	 * drawing them every frame (L2 freeze: the software rasterizer
+	 * re-renders a big model in the little CRT window on top of the
+	 * main view). Skip the classic model draw too; the PiP frame,
+	 * target text and radar box stay, as in the V19 trade-off. */
+	const bool pip_skip_model =
+		pstate.target_obj_idx >= OBJ_REF_STATIC_BASE ||
+		(pstate.target_obj_idx < NUM_OBJECTS &&
+		 (objects[pstate.target_obj_idx].genus == GENUS_STARSHIP ||
+		  objects[pstate.target_obj_idx].genus == GENUS_PLATFORM));
+	if (!pip_skip_model) {
+		if (pstate.target_obj_idx >= OBJ_REF_STATIC_BASE) {
+			const uint16_t static_index = pstate.target_obj_idx - OBJ_REF_STATIC_BASE;
+			StaticObject* object = &staticobjects[static_index];
+			if (object->ship_class >= 8 && object->ship_class <= 11) {
+				fview_newcalcrotate((int16_t)((uint16_t)object->roll_byte << 8),
+									(int16_t)((uint16_t)object->pitch_byte << 8),
+									(int16_t)((uint16_t)object->heading_byte << 8), 0, NULL);
+				lightflag = 1;
+				static_drawstaticobject(static_index);
+			}
+		} else {
+			FlightObject* object = &objects[pstate.target_obj_idx];
+			switch (object->genus) {
+				case GENUS_FIGHTER:
+				case GENUS_TRANSPORT:
+				case GENUS_UTILITY:
+				case GENUS_FREIGHTER:
+				case GENUS_STARSHIP:
+				case GENUS_PLATFORM:
+					craftptr = object->craft_ptr;
+					fview_newcalcrotate(object->roll, object->pitch, object->heading, 0, object);
+					draw_drawcomplexobject_tie98(pstate.target_obj_idx);
+					FlightModel_Draw_Object(object);
+					break;
+				case GENUS_PROJECTILE_PLAYER:
+				case GENUS_PROJECTILE_NPC:
+					fview_newcalcrotate(object->roll, object->pitch, object->heading, 0, object);
+					draw_drawlaser_tie98(pstate.target_obj_idx);
+					break;
+				default:
+					break;
+			}
 		}
 	}
 

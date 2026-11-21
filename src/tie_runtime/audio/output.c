@@ -4,11 +4,21 @@
 #include "aeron/log.h"
 #include "aeron/sync.h"
 
+#include <SDL3/SDL_thread.h>
+
 #include <stdatomic.h>
 #include <stdint.h>
 
-#define TIE_AUDIO_QUANTUM_FRAMES 256
-#define TIE_AUDIO_QUEUE_FRAMES 2048
+/* VolkyTFColl v16 (devam): quantum 256 -> 1024 frame (5.8 ms -> 23.2 ms @
+ * 44.1 kHz). Worker basina lock round-trip 4x azalir (WaitWritable +
+ * StreamWrite), uretim zamanlama jitter'ina daha dayanikli olur.
+ * Muzik icin ~17 ms ek gecikme onemsiz. Ring 8192 frame (~186 ms) ayni. */
+#define TIE_AUDIO_QUANTUM_FRAMES 1024
+/* VolkyTFColl v16: ring buffer 2048 -> 8192 frames (42.7 ms -> ~186 ms @
+ * 44.1 kHz) so the tie-pcm worker's 5.8 ms quanta survive main-thread
+ * stalls (e.g. a slow video frame) without the music stuttering. Only
+ * ~140 ms extra latency, irrelevant for music. */
+#define TIE_AUDIO_QUEUE_FRAMES 8192
 #define TIE_AUDIO_CHANNELS 2
 
 typedef struct TieAudioOutput {
@@ -32,6 +42,13 @@ static void TieAudioOutput_Clear(void) {
 
 static int TieAudioOutput_Worker(void* userdata) {
 	TieAudioOutput* output = (TieAudioOutput*)userdata;
+
+	/* VolkyTFColl v16 (devam): tie-pcm worker'a yuksek oncelik — ana
+	 * thread'in patlamalari (film decode, present beklemesi) worker'i
+	 * acliktan oldurmesin. 186 ms ring'e ragmen muzik kesikse uretici
+	 * acligi suphesi var; oncelik bunu kapatir. Basarisiz olursa
+	 * sessizce normal oncelikle devam eder. */
+	(void)SDL_SetCurrentThreadPriority(SDL_THREAD_PRIORITY_HIGH);
 
 	while (!atomic_load_explicit(&output->stopping, memory_order_acquire)) {
 		if (!Aeron_AudioStreamWaitWritable(output->stream, TIE_AUDIO_QUANTUM_FRAMES))

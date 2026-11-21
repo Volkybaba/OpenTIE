@@ -196,6 +196,24 @@ uint8_t musicvolflag;
  *   (4) if recording, append to tape.
  *   (5) dispatch flight controls via user_inputforplane.
  */
+/* VolkyTFColl v2: abort the current mission, exactly like the Space key
+ * confirmation of the Q (end mission) prompt (user.c case 2): spool a
+ * recording replay, then set end_flag = 1 with player_status = 3 so the
+ * next tick goes to AFTER_MISSION and debrief. The Q-Space keyboard path
+ * is untouched. */
+void TieFlight_RequestAbort(void) {
+	if (recordingreplay) {
+		if (!replayio_spoolreplayinput())
+			replaytotalcnt -= replaybuffercnt;
+		replaybuffercnt = 0;
+		recordingreplay = 0;
+		msg_messageprintf(MSG_REPLAY_CAMERA_OFF);
+		calcframerate = 0;
+	}
+	mission.end_flag = 1;
+	mission.player_status = 3;
+}
+
 // FUNCTION: TIE95 0x5C440
 // FUNCTION: TIE98 0x493840
 void user_userinterface(void) {
@@ -3112,6 +3130,10 @@ void user_setnewtarget(uint16_t new_obj) {
 	uint16_t i;
 	uint16_t working_subsystems;
 	CraftData* cp_t;
+
+	/* DIAG freeze: log every target change so a 30s stall after a Y
+	 * press can be correlated with the target switch in the log. */
+	TieDiagnostics_Log(TIE_LOG_INFO, "DIAG ykey target=%u", (unsigned)new_obj);
 
 	if (pstate.player_craft->status_flags & 4) {
 		if (new_obj == 0xFFFF || new_obj == pstate.target_obj_idx)
