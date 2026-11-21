@@ -32,6 +32,10 @@ typedef struct TieVideoOptions {
 	TieSdrContentGamma sdr_content_gamma;
 	bool paper_white_auto;
 	float paper_white_nits;
+	/* VolkyTFColl v11: user brightness, 0.5-2.0, default 1.0. Live
+	 * presentation (flight tonemap exposure + classic layer tint) and
+	 * screenshots read this value; it is NOT an HDR-only control. */
+	float brightness;
 	int ssao_quality;
 	bool shadows_enabled;
 	int shadow_atlas_size;
@@ -65,6 +69,11 @@ bool TieRemaster_ApplyVideoOptions(const TieVideoOptions* options);
 bool TieRemaster_GetVideoOptions(TieVideoOptions* out_options);
 bool TieRemaster_SetAspectCorrectLegacyScenes(bool enabled);
 bool TieRemaster_SuppressesClassicFlight(const TieSnapshot* snapshot);
+/* Returns the offscreen flight present target (RGBA16F) once a flight frame
+ * has been rendered into it, or NULL. The target holds the current on-screen
+ * flight image in both presentation branches: the direct-to-swapchain path
+ * renders it first via TieRemaster_RenderFlightTarget. */
+AeronRenderTarget* TieRemaster_GetFlightPresentTarget(const TieSnapshot* snapshot);
 /* Switches the renderer to a runtime-selected source and schedules the
  * flight-only GPU resources for rebuilding during the loading sequence. */
 bool TieRemaster_SetFlightSource(const struct TieFlightAssetSource* source);

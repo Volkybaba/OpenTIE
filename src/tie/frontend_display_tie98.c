@@ -10,6 +10,7 @@
 #include "tie_runtime/diagnostics/diagnostics.h"
 #include "tie_runtime/display/classic_display.h"
 #include "tie_runtime/display/classic_framebuffer.h"
+#include "tie_runtime/display/screenshot.h"
 #include "tie_runtime/flight_assets/model_types.h"
 #include "tie_runtime/input/input.h"
 #include "tie_runtime/runtime/exports.h"
@@ -1195,54 +1196,9 @@ void FrontendDisplay_ClearPresentationSurfaces(void) {
 
 // FUNCTION: TIE98 0x49D180
 HRESULT FrontendDisplay_CaptureScreenshot(void) {
-	int sequence;
-	int index;
-	int lock_count;
-	int saved_offscreen_route;
-	uint16_t saved_maingameflag;
-	HRESULT result;
-
-	char file_name[64];
-	uint8_t palette_bgra[1024];
-
+	/* Retail capture is a stub in this build (it used to return DX_DD_OK
+	 * immediately); route Alt+O through the classic-framebuffer capture
+	 * (VolkyTFColl v2). */
+	(void)TieScreenshot_CaptureNow();
 	return DX_DD_OK;
-
-	sequence = 0;
-	for (;;) {
-		FILE* file;
-
-		sprintf(file_name, "tiescreen%d.bmp", sequence);
-		file = fopen(file_name, "rb");
-		if (file == NULL)
-			break;
-		fclose(file);
-		++sequence;
-	}
-
-	for (index = 0; index < 256; ++index) {
-		palette_bgra[4 * index] = g_directDrawPaletteEntries[index].blue;
-		palette_bgra[4 * index + 1] = g_directDrawPaletteEntries[index].green;
-		palette_bgra[4 * index + 2] = g_directDrawPaletteEntries[index].red;
-		palette_bgra[4 * index + 3] = 0;
-	}
-
-	lock_count = FlightSurface_GetLockCount();
-	for (index = 0; index < lock_count; ++index)
-		FlightSurface_Unlock();
-	FrontendDisplay_PresentFrame();
-
-	saved_offscreen_route = g_flightDrawToOffscreenSurface;
-	saved_maingameflag = maingameflag;
-	g_flightDrawToOffscreenSurface = 0;
-	maingameflag = 1;
-	FlightSurface_Lock();
-	Bitmap_WriteBmp24(file_name, xtrans2_videobaseptr, g_surfaceWidth, g_surfaceHeight, (int)g_surfacePitch,
-					  8 * g_flight16bppBytesPerPixel, FrontendDisplay_GetPixelFormat555(), palette_bgra);
-	FlightSurface_Unlock();
-	g_flightDrawToOffscreenSurface = saved_offscreen_route;
-	maingameflag = saved_maingameflag;
-	result = FrontendDisplay_PresentFrame();
-	for (index = 0; index < lock_count; ++index)
-		FlightSurface_Lock();
-	return result;
 }

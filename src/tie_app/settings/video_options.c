@@ -20,6 +20,8 @@ static bool TieVideoOptions_VideoOptionsValid(const TieAppVideoConfig* options) 
 	const TieVideoOptions* output = &options->output;
 	return output->sdr_content_gamma >= TIE_SDR_CONTENT_GAMMA_2_2 &&
 		   output->sdr_content_gamma <= TIE_SDR_CONTENT_GAMMA_SRGB &&
+		   isfinite(output->brightness) && output->brightness >= 0.5f &&
+		   output->brightness <= 2.0f &&
 		   output->starfield_style >= TIE_FLIGHT_STARFIELD_STYLE_AUTO &&
 		   output->starfield_style <= TIE_FLIGHT_STARFIELD_STYLE_TIE98 &&
 		   (output->paper_white_auto ||
@@ -29,6 +31,13 @@ static bool TieVideoOptions_VideoOptionsValid(const TieAppVideoConfig* options) 
 static void TieVideoOptions_VideoOptionsNormalize(TieAppVideoConfig* options) {
 	options->fullscreen = options->fullscreen != 0;
 	options->output.hdr = options->output.hdr != 0;
+	/* VolkyTFColl v11: brightness 0.5-2.0; non-finite or missing -> 1.0. */
+	if (!isfinite(options->output.brightness))
+		options->output.brightness = 1.0f;
+	if (options->output.brightness < 0.5f)
+		options->output.brightness = 0.5f;
+	if (options->output.brightness > 2.0f)
+		options->output.brightness = 2.0f;
 	options->output.paper_white_auto = options->output.paper_white_auto != 0;
 	options->output.shadows_enabled = options->output.shadows_enabled != 0;
 	if (options->output.ssao_quality < 0)
@@ -64,6 +73,7 @@ static void TieVideoOptions_VideoOptionsNormalize(TieAppVideoConfig* options) {
 
 static bool TieVideoOptions_VideoOptionsEqual(const TieAppVideoConfig* left, const TieAppVideoConfig* right) {
 	return left->fullscreen == right->fullscreen && left->output.hdr == right->output.hdr &&
+		   left->output.brightness == right->output.brightness &&
 		   left->output.sdr_content_gamma == right->output.sdr_content_gamma &&
 		   left->output.paper_white_auto == right->output.paper_white_auto &&
 		   left->output.paper_white_nits == right->output.paper_white_nits &&

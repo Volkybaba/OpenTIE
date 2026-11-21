@@ -5,6 +5,7 @@
 
 #include "aeron/aeron.h"
 #include "aeron/compat/host.h"
+#include "aeron/scene/present.h"
 #include "tie_runtime/display/classic_framebuffer.h"
 #include "tie_runtime/input/input.h"
 #include "tie_runtime/presentation/presentation.h"
@@ -40,6 +41,14 @@ void TieClassicLayer_SyncInputExtent(void) {
 	s_classic_layer.framebuffer_height = height;
 	TieInput_SetFramebufferSize(width, height);
 }
+
+/* VolkyTFColl v13: brightness diagnostic logging (tie.brightness).
+ * Rate-limited: log on brightness change, otherwise at most once
+ * every 600 submits (~10 s at 60 fps). The first call always logs
+ * (last_b starts at -1). Absence of the "classic submit" line in
+ * the log means this layer was never submitted. */
+static float s_classic_brightness_log_last_b = -1.0f;
+static int s_classic_brightness_log_tick = 0;
 
 void TieClassicLayer_Submit(const TieFramebuffer* framebuffer) {
 	const TiePresentationLayout* presentation = TiePresentation_Layout();
@@ -84,7 +93,25 @@ void TieClassicLayer_Submit(const TieFramebuffer* framebuffer) {
 		.logical_rect = presentation->classic,
 		.blend_mode = AERON_LAYER_BLEND_OPAQUE,
 		.sampling = AERON_PIXEL_SAMPLING_SHARP_BILINEAR,
+		/* VolkyTFColl v11: user brightness as a composition tint. The
+		 * fullscreen shader multiplies the tint AFTER the sRGB->linear
+		 * decode, so this is a linear-space scale — the same kind of
+		 * scale as the flight tonemap exposure. Untinted at 100%. */
+		.tint_enabled = AeronScenePresent_Brightness() != 1.0f,
+		.tint_rgba = { AeronScenePresent_Brightness(), AeronScenePresent_Brightness(),
+					   AeronScenePresent_Brightness(), 1.0f },
 	};
+	/* VolkyTFColl v13: diagnostic — live b + tint at submit time. */
+	{
+		const float brightness = AeronScenePresent_Brightness();
+		++s_classic_brightness_log_tick;
+		if (brightness != s_classic_brightness_log_last_b ||
+			(s_classic_brightness_log_tick % 600) == 0) {
+			s_classic_brightness_log_last_b = brightness;
+			Aeron_LogInfo("tie.brightness", "classic submit b=%.2f tint=%d",
+				(double)brightness, (int)(brightness != 1.0f));
+		}
+	}
 	if (!Aeron_SubmitPixelLayer(&layer))
 		Aeron_RequestFatalRendererError("classic framebuffer layer submission");
 }

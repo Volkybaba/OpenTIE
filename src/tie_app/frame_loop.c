@@ -14,6 +14,7 @@
 #include "tie_remaster/remaster.h"
 #include "tie_runtime/display/classic_display.h"
 #include "tie_runtime/display/classic_framebuffer.h"
+#include "tie_runtime/display/screenshot.h"
 #include "tie_runtime/flight_assets/service.h"
 #include "tie_runtime/input/input.h"
 #include "tie_runtime/presentation/classic_layer.h"
@@ -191,6 +192,7 @@ void TieFrameLoop_Run(void) {
 
 		if (Aeron_FatalErrorRequested())
 			break;
+		TieScreenshot_Update(input);
 		if (!Aeron_Present()) {
 			Aeron_RequestFatalRendererError("frame presentation");
 			break;

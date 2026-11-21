@@ -18,9 +18,11 @@
 #include "tie_app/settings/mouse_options.h"
 #include "tie_app/settings/video_options.h"
 #include "tie_app/setup/installation_ui.h"
+#include "tie/user.h"
 #include "tie_remaster/remaster.h"
 #include "tie_runtime/input/controller_mapping.h"
 #include "tie_runtime/runtime/runtime.h"
+#include "tie_runtime/snapshot/snapshot.h"
 
 typedef enum TiePathPickerTarget {
 	TIE_PATH_PICKER_TIE95,
@@ -53,6 +55,7 @@ static struct {
 	bool captures_controller;
 	bool captures_keyboard;
 	int exit_confirmation_open;
+	int abort_confirmation_open;
 	int page;
 	char error[512];
 	AeronUiFilePicker* path_picker;
@@ -60,6 +63,10 @@ static struct {
 	TieControllerSettings controller;
 	TieKeyboardSettings keyboard;
 } g_settings;
+
+static bool g_settings_just_opened;
+static int g_settings_open_guard_frames; /* VolkyTFColl v8: acilis sonrasi
+	 * cancel'i sayac bitene kadar yoksay (hizli bas-birak deligi) */
 
 static bool TieSettings_RequestSelectedFlightProfile(const TieAppLaunchOptions* launch,
 													 const TieAppLiveFlightOptions* flight, char* error,
@@ -111,6 +118,7 @@ static bool TieSettings_PersistVideoOptions(const TieAppVideoConfig* options, vo
 	const TieAppVideoConfig* defaults = &config->defaults.video;
 	const bool use_defaults = options->fullscreen == defaults->fullscreen &&
 							  options->output.hdr == defaults->output.hdr &&
+							  options->output.brightness == defaults->output.brightness &&
 							  options->output.sdr_content_gamma == defaults->output.sdr_content_gamma &&
 							  options->output.paper_white_auto == defaults->output.paper_white_auto &&
 							  options->output.paper_white_nits == defaults->output.paper_white_nits;
@@ -329,7 +337,10 @@ static bool TieSettings_SettingsClose(void) {
 	g_settings.captures_controller = false;
 	g_settings.captures_keyboard = false;
 	g_settings.exit_confirmation_open = 0;
+	g_settings.abort_confirmation_open = 0;
 	g_settings.open = false;
+	g_settings_just_opened = false;
+	g_settings_open_guard_frames = 0;
 	TieControllerMapping_Resume();
 	return true;
 }
@@ -338,6 +349,9 @@ void TieSettings_Show(void) {
 	if (!g_settings.available || g_settings.open)
 		return;
 	g_settings.open = true;
+	g_settings_just_opened = true;
+	g_settings_open_guard_frames = 10; /* ~167ms @60fps: gec klavye ESC
+	 * kenarini genis payla yut; gercek ikinci basis (~200ms+) etkilenmez */
 	g_settings.captures_controller = false;
 	g_settings.captures_keyboard = false;
 	g_settings.error[0] = '\0';
@@ -369,6 +383,19 @@ static void TieSettings_VideoPage(AeronUiContext* ui) {
 	int hdr = options.output.hdr;
 	if (AeronUi_Toggle(ui, "HDR Output", &hdr)) {
 		options.output.hdr = hdr != 0;
+		changed = true;
+	}
+	/* VolkyTFColl v11: user brightness, SDR included — no HDR gate
+	 * (unlike SDR Content Gamma / HDR Paper White below). 50-200% in
+	 * 25% steps; 100% is identity. Applies live to the flight tonemap
+	 * exposure and to the classic layer tint. */
+	int brightness = (int)(options.output.brightness * 100.0f + 0.5f);
+	if (brightness < 50)
+		brightness = 50;
+	if (brightness > 200)
+		brightness = 200;
+	if (AeronUi_SliderInt(ui, "Brightness", &brightness, 50, 200, 25, "%d%%")) {
+		options.output.brightness = (float)brightness / 100.0f;
 		changed = true;
 	}
 	AeronUi_Spacer(ui, 8.0f);
@@ -730,6 +757,18 @@ static void TieSettings_GamePage(AeronUiContext* ui) {
 		if (!TieInflightSettings_Set(&inflight, error, sizeof error))
 			TieSettings_SettingsReportError(error);
 	}
+
+	/* VolkyTFColl v2: abort the current mission (live flight control only;
+	 * replays never reach this button). */
+	{
+		const TieSnapshot* snapshot = TieSnapshot_Current();
+		if (snapshot && snapshot->scene_kind == TIE_SCENE_FLIGHT && snapshot->replay_mode != 2) {
+			AeronUi_Spacer(ui, 8.0f);
+			AeronUi_Header(ui, "Mission");
+			if (AeronUi_Button(ui, "Abort Mission"))
+				g_settings.abort_confirmation_open = 1;
+		}
+	}
 }
 
 /* Follows OpenXW's mouse page with TIE's button behavior. */
@@ -913,6 +952,26 @@ static void TieSettings_DrawExitConfirmation(AeronUiContext* ui) {
 	AeronUi_EndModal(ui);
 }
 
+/* VolkyTFColl v2: same modal pattern as the exit confirmation. Confirming
+ * ends the mission exactly like the Q + Space keyboard path (end_flag = 1,
+ * player_status = 3); the menu closes and the next tick goes to debrief. */
+static void TieSettings_DrawAbortConfirmation(AeronUiContext* ui) {
+	if (!AeronUi_BeginModal(ui, "ABORT MISSION", &g_settings.abort_confirmation_open, NULL))
+		return;
+	AeronUi_Help(ui, "Abort mission and return to debrief?");
+	AeronUi_BeginColumns(ui, 2, NULL);
+	if (AeronUi_Button(ui, "Cancel"))
+		g_settings.abort_confirmation_open = 0;
+	AeronUi_NextColumn(ui);
+	if (AeronUi_Button(ui, "Abort Mission##confirm")) {
+		g_settings.abort_confirmation_open = 0;
+		TieFlight_RequestAbort();
+		(void)TieSettings_SettingsClose();
+	}
+	AeronUi_EndColumns(ui);
+	AeronUi_EndModal(ui);
+}
+
 void TieSettings_Frame(const AeronInputSnapshot* input, float dt_seconds) {
 	static const char* const pages[] = { "Game", "Video", "Audio", "Controller", "Keyboard", "Mouse" };
 	if (!g_settings.available || !g_settings.open || !input)
@@ -924,7 +983,7 @@ void TieSettings_Frame(const AeronInputSnapshot* input, float dt_seconds) {
 	TieControllerSettings_Discover(&g_settings.controller, g_settings.ui, input,
 								   &g_settings.config->gamepad_defaults);
 	AeronUiWindowDesc window = { .width_ref = 980.0f, .height_ref = 1000.0f, .centered = 1 };
-	if (AeronUi_BeginWindow(g_settings.ui, "OpenTIE Settings - v" TIE_VERSION_STRING, &window)) {
+	if (AeronUi_BeginWindow(g_settings.ui, "VolkyTFColl 0.50", &window)) { /* VolkyTFColl v1: version stamp */
 		const int previous_page = g_settings.page;
 		AeronUi_BeginTabBar(g_settings.ui, "pages", pages, sizeof pages / sizeof pages[0], &g_settings.page);
 		if (previous_page != g_settings.page) {
@@ -982,13 +1041,34 @@ void TieSettings_Frame(const AeronInputSnapshot* input, float dt_seconds) {
 		}
 		if (g_settings.open && g_settings.exit_confirmation_open)
 			TieSettings_DrawExitConfirmation(g_settings.ui);
+		if (g_settings.open && g_settings.abort_confirmation_open)
+			TieSettings_DrawAbortConfirmation(g_settings.ui);
 		AeronUi_EndWindow(g_settings.ui);
 	}
 	TieSettings_DrawPathPicker(g_settings.ui);
 	AeronUiOutput out = AeronUi_EndFrame(g_settings.ui);
 	g_settings.captures_keyboard = AeronUi_KeyboardCaptureActive(g_settings.ui) != 0;
 	g_settings.captures_controller = out.capture_all != 0 && !g_settings.captures_keyboard;
-	if (out.cancel_pressed)
+	/* VolkyTFColl v3: ignore the opening press's trailing cancel edge (dual
+	   ESC edges: gamepad BACK opens, late keyboard ESC would close). */
+	const bool settings_just_opened = g_settings_just_opened;
+	if (settings_just_opened) {
+		const bool esc_held = input->key_down[AERON_KEY_ESCAPE] != 0;
+		bool back_held = false;
+		for (int pad = 0; pad < AERON_CONTROLLER_MAX; ++pad) {
+			if (input->controllers[pad].connected &&
+			    (input->controllers[pad].gamepad_buttons & (1u << AERON_GAMEPAD_BUTTON_BACK)) != 0)
+				back_held = true;
+		}
+		if (!esc_held && !back_held)
+			g_settings_just_opened = false;
+	}
+	/* VolkyTFColl v8: zamana bagli guard — hold guard basili degilse ilk
+	 * karede temizlenir, ama gec klavye ESC kenari N+2'de gelebilir; sayac
+	 * bitene kadar cancel yoksay. */
+	if (g_settings_open_guard_frames > 0)
+		--g_settings_open_guard_frames;
+	if (out.cancel_pressed && !settings_just_opened && g_settings_open_guard_frames == 0)
 		(void)TieSettings_SettingsClose();
 	AeronUi_Submit(g_settings.ui);
 }

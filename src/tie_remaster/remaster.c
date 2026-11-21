@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "aeron/compat/host.h"
+#include "aeron/log.h" /* VolkyTFColl v13: tie.brightness diagnostic logging */
 #include "aeron/scene/blend_ramp.h"
 #include "aeron/scene/present.h"
 #include "tie_remaster/flight/cockpit/renderer.h"
@@ -187,6 +188,14 @@ static bool TieRemaster_ApplyPendingVideoOptions(void) {
 	Aeron_SetOutputSdrContentGamma(TieRemaster_SdrContentGammaDecode(options->sdr_content_gamma));
 	Aeron_SetOutputPaperWhiteNits(options->paper_white_auto ? 0.0f : options->paper_white_nits);
 #endif
+	/* VolkyTFColl v11: user brightness -> present-chain scene exposure
+	 * (flight tonemap). The classic pixel layer reads the same value
+	 * live in TieClassicLayer_Submit, so one setting brightens both. */
+	AeronScenePresent_SetBrightness(options->brightness);
+	/* VolkyTFColl v13: diagnostic — log the live value on every apply
+	 * (fires on change/init only; also logs b == 1.0 so a reset to 1.0
+	 * is visible, not silent). */
+	Aeron_LogInfo("tie.brightness", "apply b=%.2f", (double)options->brightness);
 	if (g_remaster.flight.renderer &&
 		!TieFlightRenderer_ApplyQuality(
 			g_remaster.flight.renderer, options->ssao_quality, options->shadows_enabled,
@@ -1232,6 +1241,17 @@ bool TieRemaster_SuppressesClassicFlight(const TieSnapshot* snapshot) {
 	return g_remaster.initialized && snapshot && snapshot->scene_kind == TIE_SCENE_FLIGHT &&
 		   !TieRemaster_FlightRequiresClassicScreen(snapshot) && !g_remaster.pending_view_mode_valid &&
 		   g_remaster.view_mode == TIE_REMASTER_VIEW_HD && g_remaster.blend.alpha >= 1.0f;
+}
+
+AeronRenderTarget* TieRemaster_GetFlightPresentTarget(const TieSnapshot* snapshot) {
+	TieRemasterFlight* flight;
+
+	if (!g_remaster.initialized || !snapshot || snapshot->scene_kind != TIE_SCENE_FLIGHT)
+		return NULL;
+	flight = &g_remaster.flight;
+	if (!flight->renderer || !flight->present_target || !flight->rendered)
+		return NULL;
+	return flight->present_target;
 }
 
 bool TieRemaster_GetVideoOptions(TieVideoOptions* out_options) {

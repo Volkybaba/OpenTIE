@@ -83,7 +83,7 @@ static AeronConfig TieApplication_AeronConfig(const TieLaunchOptions* launch) {
 	config.resource_root = launch->resource_root;
 	config.resource_path = "resources";
 	config.shader_path = TIE_SHADER_RELATIVE_DIR;
-	config.window_title = "OpenTIE";
+	config.window_title = "VolkyTFColl"; /* VolkyTFColl v1 */
 	config.window_icon_bmp = tie_window_icon_bmp;
 	config.window_icon_bmp_size = sizeof tie_window_icon_bmp;
 	config.logical_width = TIE_PRESENTATION_INITIAL_WIDTH;
@@ -135,6 +135,7 @@ static AeronDx5Rect TieApplication_Dx5PresentationRect(void* context, int surfac
 }
 
 int TieApplication_Run(const TieLaunchOptions* launch) {
+	Aeron_LogInfo("tie.app", "VolkyTFColl build v15"); /* VolkyTFColl v15 */
 	const AeronConfig config = TieApplication_AeronConfig(launch);
 
 	if (!Aeron_Init(&config)) {
@@ -395,6 +396,7 @@ int TieApplication_Run(const TieLaunchOptions* launch) {
 					.fsr_sharpness = app_config.requested.video.output.fsr_sharpness,
 					.motion_blur_quality = app_config.requested.video.output.motion_blur_quality,
 					.motion_blur_shutter = app_config.requested.video.output.motion_blur_shutter,
+					.brightness = app_config.requested.video.output.brightness,
 					.msaa_samples = app_config.requested.video.output.msaa_samples,
 					.starfield_style = app_config.requested.video.output.starfield_style,
 			},

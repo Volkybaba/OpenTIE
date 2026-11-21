@@ -14,6 +14,7 @@
 #include "tie_runtime/diagnostics/diagnostics.h"
 #include "tie_runtime/display/classic_display.h"
 #include "tie_runtime/display/classic_framebuffer.h"
+#include "tie_runtime/display/screenshot.h"
 #include "tie_runtime/display/dos_bios.h"
 #include "tie_runtime/display/tie98_starfield.h"
 #include "tie_runtime/flight_assets/model_types.h"
@@ -2293,7 +2294,7 @@ void rtsvga2_drawstars_tie98(void) {
 int rtsvga2_takeScreenshot(void) {
 	/* Retail: rtsvga2_saveboxVGA(newbuf, 0, 0, screenXRes, screenYRes), then
 	 * Save_PCX_Screenshot(newbuf, screenXRes, screenYRes, rtsvga2_vgapalette).
-	 * The PCX writer is an unrecovered library routine; capture stays
-	 * disabled until it is recovered. */
-	return 0;
+	 * The PCX writer is an unrecovered library routine; route Alt+O through
+	 * the classic-framebuffer capture instead (VolkyTFColl v2). */
+	return TieScreenshot_CaptureNow();
 }

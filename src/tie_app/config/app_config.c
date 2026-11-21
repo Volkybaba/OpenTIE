@@ -186,7 +186,8 @@ static bool TieAppConfig_ValidateSchemaKeys(const AeronConfigFile* document, boo
 				  "opt_projectile_emissive_strength");
 	VALIDATE_KEYS(document, "input", warn, "controllers", "gamepad_defaults", "keyboard", "mouse_flight",
 				  "mouse_mode", "mouse_sensitivity", "mouse_invert_y");
-	VALIDATE_KEYS(document, "video", warn, "fullscreen", "hdr", "sdr_content_gamma", "paper_white_nits");
+	VALIDATE_KEYS(document, "video", warn, "fullscreen", "hdr", "sdr_content_gamma", "paper_white_nits",
+		  "brightness");
 	VALIDATE_KEYS(document, "render", warn, "anisotropy", "ssao", "temporal_upscaling", "shadows", "tonemap",
 				  "motion_blur", "msaa_samples", "starfield_style");
 	VALIDATE_KEYS(document, "render.motion_blur", warn, "quality", "shutter");
@@ -236,9 +237,25 @@ static bool TieAppConfig_ParseVideo(const AeronConfigFile* document, TieAppVideo
 									size_t capacity) {
 	const AeronConfigNode* gamma;
 	const AeronConfigNode* white;
+	const AeronConfigNode* brightness;
 	if (!TieAppConfig_ReadBool(document, "video.fullscreen", &out->fullscreen, error, capacity) ||
 		!TieAppConfig_ReadBool(document, "video.hdr", &out->output.hdr, error, capacity))
 		return false;
+	/* VolkyTFColl v11: user brightness, 0.5-2.0, default 1.0 when absent;
+	 * out-of-range values are clamped (a hand-edited config must not
+	 * fail the whole load). */
+	brightness = AeronConfigFile_GetNode(document, "video.brightness");
+	{
+		double value = AeronConfigNode_Float(brightness, NAN);
+		if (!isfinite(value))
+			out->output.brightness = 1.0f;
+		else if (value < 0.5)
+			out->output.brightness = 0.5f;
+		else if (value > 2.0)
+			out->output.brightness = 2.0f;
+		else
+			out->output.brightness = (float)value;
+	}
 	gamma = AeronConfigFile_GetNode(document, "video.sdr_content_gamma");
 	if (AeronConfigNode_Type(gamma) == AERON_CONFIG_STRING) {
 		const char* name = AeronConfigNode_String(gamma, "");
@@ -1004,7 +1021,9 @@ static bool TieAppConfig_SetVideoOverrides(AeronConfigFile* document, const TieA
 		return false;
 	if (!TieAppConfig_SetBoolOverride(document, "video.fullscreen", video->fullscreen, defaults->fullscreen,
 									  error) ||
-		!TieAppConfig_SetBoolOverride(document, "video.hdr", video->output.hdr, defaults->output.hdr, error))
+		!TieAppConfig_SetBoolOverride(document, "video.hdr", video->output.hdr, defaults->output.hdr, error) ||
+		!TieAppConfig_SetFloatOverride(document, "video.brightness", video->output.brightness,
+									   defaults->output.brightness, error))
 		return false;
 	if (video->output.sdr_content_gamma < TIE_SDR_CONTENT_GAMMA_2_2 ||
 		video->output.sdr_content_gamma > TIE_SDR_CONTENT_GAMMA_SRGB ||
@@ -1073,6 +1092,7 @@ bool TieAppConfig_SetVideo(TieAppConfigState* state, const TieAppVideoConfig* vi
 bool TieAppConfig_RestoreVideo(TieAppConfigState* state, char* error, size_t capacity) {
 	static const char* const paths[] = { "video.fullscreen",
 										 "video.hdr",
+										 "video.brightness",
 										 "video.sdr_content_gamma",
 										 "video.paper_white_nits",
 										 "render.ssao.quality",

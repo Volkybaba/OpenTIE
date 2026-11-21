@@ -313,6 +313,8 @@ set(TIE_RUNTIME_SOURCES
     src/tie_runtime/display/palette_cycle.h
     src/tie_runtime/display/dos_bios.c
     src/tie_runtime/display/dos_bios.h
+    src/tie_runtime/display/screenshot.c
+    src/tie_runtime/display/screenshot.h
     src/tie_runtime/display/tie98_starfield.c
     src/tie_runtime/display/tie98_starfield.h
     src/tie_runtime/runtime/pointer_key.h
